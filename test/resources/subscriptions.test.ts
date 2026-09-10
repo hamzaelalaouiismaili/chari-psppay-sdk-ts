@@ -11,6 +11,10 @@ function client(body: unknown = { content: [], totalPages: 1, number: 0 }) {
   return { chari, calls };
 }
 
+function idempotencyKey(call: { init: RequestInit }): string | undefined {
+  return (call.init.headers as Record<string, string>)['Idempotency-Key'];
+}
+
 describe('subscriptions', () => {
   it('creates and reads', async () => {
     const { chari, calls } = client();
@@ -23,6 +27,13 @@ describe('subscriptions', () => {
     expect(calls[1]!.url).toContain('/v1/subscriptions?');
     expect(calls[2]!.url).toContain('/v1/subscriptions/sub_1');
     expect(calls[3]!.url).toContain('/v1/subscriptions/sub_1/charges');
+  });
+
+  it('sets Idempotency-Key on subscriptions.create', async () => {
+    const { chari, calls } = client();
+    await chari.subscriptions.create({ amount: 99, frequency: 'MONTHLY' } as never);
+
+    expect(idempotencyKey(calls[0]!), 'subscriptions.create').toBeTruthy();
   });
 
   it('runs every lifecycle verb', async () => {
@@ -39,5 +50,20 @@ describe('subscriptions', () => {
     expect(calls[3]!.url).toContain('/v1/subscriptions/sub_1/payment-method');
     expect(calls[3]!.init.method).toBe('PUT');
     expect(calls[4]!.url).toContain('/v1/subscriptions/sub_1/test-auto-pay');
+  });
+
+  it('sets Idempotency-Key on every money-moving lifecycle verb and testAutoPay', async () => {
+    const { chari, calls } = client({});
+    await chari.subscriptions.pause('sub_1');
+    await chari.subscriptions.resume('sub_1');
+    await chari.subscriptions.cancel('sub_1');
+    await chari.subscriptions.selectPaymentMethod('sub_1', { paymentMethodId: 'pm_1' } as never);
+    await chari.subscriptions.testAutoPay('sub_1');
+
+    expect(idempotencyKey(calls[0]!), 'subscriptions.pause').toBeTruthy();
+    expect(idempotencyKey(calls[1]!), 'subscriptions.resume').toBeTruthy();
+    expect(idempotencyKey(calls[2]!), 'subscriptions.cancel').toBeTruthy();
+    expect(idempotencyKey(calls[3]!), 'subscriptions.selectPaymentMethod').toBeUndefined();
+    expect(idempotencyKey(calls[4]!), 'subscriptions.testAutoPay').toBeTruthy();
   });
 });

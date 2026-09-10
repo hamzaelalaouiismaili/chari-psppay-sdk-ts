@@ -123,6 +123,11 @@ export class HttpClient {
         continue;
       } catch (err) {
         lastError = err;
+        // A caller-initiated abort is a decision, not a transient failure —
+        // retrying it would spend backoff time on a request the caller has
+        // already told us to stop, and would eventually report the wrong
+        // reason for the failure.
+        if (req.options?.signal?.aborted) throw err;
         const isConnection = err instanceof ChariPayConnectionError;
         if (!isConnection || !retryable || attempt > maxRetries) throw err;
         await sleep(backoffMs(attempt));
@@ -165,7 +170,7 @@ export class HttpClient {
     // on the 0→1 transition, never reaches our listener and the request
     // goes out anyway.
     if (callerSignal?.aborted) {
-      throw new ChariPayConnectionError(`Request to ${url} was aborted before it was sent.`, callerSignal.reason);
+      throw new ChariPayConnectionError(`Request to ${url} was aborted by the caller.`, callerSignal.reason);
     }
 
     const controller = new AbortController();

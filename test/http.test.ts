@@ -248,6 +248,28 @@ describe('HttpClient', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it('a caller abort on a retryable request rejects promptly instead of consuming the retry budget', async () => {
+      const fetchMock = hangingFetch();
+      // Default maxRetries (no override), so a bug that treats the abort as
+      // a retryable connection failure would retry twice with backoff
+      // before rejecting.
+      const http = new HttpClient(config(fetchMock as unknown as typeof fetch, { timeout: 5000, maxRetries: 2 }));
+      const controller = new AbortController();
+
+      const promise = http.request({
+        method: 'GET',
+        path: '/v1/wallet',
+        options: { signal: controller.signal },
+      });
+      queueMicrotask(() => controller.abort());
+
+      const err = await promise.catch((e) => e);
+      expect(err).toBeInstanceOf(ChariPayConnectionError);
+      expect((err as Error).message).toMatch(/aborted by the caller/);
+      // The robust proof that no retry was attempted: fetch was invoked exactly once.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it('a timed-out idempotent POST that is retried replays the SAME Idempotency-Key', async () => {
       const keys: Array<string | undefined> = [];
       let calls = 0;

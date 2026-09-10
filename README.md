@@ -143,6 +143,18 @@ for await (const tx of chari.transactions.list()) { // every page, transparently
 const recent = await chari.transactions.list().autoPagingToArray({ limit: 500 });
 ```
 
+## Metadata
+
+Every `metadata` parameter and response field accepts/returns `ChariPayMetadata`, a flat `Record<string, string | number | boolean | null>` — scalars only, matching the API's own "opaque identifiers" guidance and its 4 KB serialized limit:
+
+```ts
+await chari.paymentLinks.create({
+  amount: 149.9,
+  description: 'Order #1234',
+  metadata: { orderId: 'A-1', verified: true },
+});
+```
+
 ## Files
 
 QR codes, in-store posters, RIB documents and CSV exports come back as a `ChariPayFile`:

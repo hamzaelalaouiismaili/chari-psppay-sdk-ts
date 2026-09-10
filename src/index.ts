@@ -2,6 +2,7 @@ export { ChariPay, PRODUCTION_BASE_URL, SANDBOX_BASE_URL, resolveBaseUrl } from 
 export type { ChariPayConfig } from './client.js';
 export type { RequestOptions, ChariPayRequestInfo, ChariPayResponseInfo } from './http.js';
 export type { ChariPayFile } from './file.js';
+export type { ChariPayMetadata } from './types/metadata.js';
 export { PagePromise } from './pagination.js';
 export type { Page, PaginationParams } from './pagination.js';
 export type {

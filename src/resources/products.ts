@@ -2,11 +2,12 @@ import type { components } from '../generated/api.js';
 import type { RequestOptions } from '../http.js';
 import type { PagePromise, PaginationParams } from '../pagination.js';
 import type { ProductOrder } from '../types/gaps.js';
+import type { WithMetadata } from '../types/metadata.js';
 import { BaseResource } from './base.js';
 
-export type CreateProductParams = components['schemas']['CreateProductRequest'];
+export type CreateProductParams = WithMetadata<components['schemas']['CreateProductRequest']>;
 export type UpdateProductParams = components['schemas']['UpdateProductRequest'];
-export type Product = components['schemas']['ProductResponse'];
+export type Product = WithMetadata<components['schemas']['ProductResponse']>;
 
 export interface ListProductsParams extends PaginationParams {
   active?: boolean;

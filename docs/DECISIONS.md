@@ -68,6 +68,39 @@ A backend that misreports `number` could therefore terminate iteration early.
 The alternative — counting loop iterations — is wrong whenever a caller starts
 at a non-zero `page`, which is the more common failure.
 
+### `metadata` is typed as `ChariPayMetadata`, overriding the generated shape
+
+`api-1.yaml` declares every `metadata` field as `additionalProperties: { type: object }`.
+`openapi-typescript` renders that literally as `{ [key: string]: Record<string, never> }`
+— an index signature whose values must be objects with no properties, i.e. only
+`{}`. That made `metadata` unusable: `chari.paymentLinks.create({ ..., metadata:
+{ orderId: 'A-1' } })`, the single most obvious call, did not compile, because
+`'A-1'` is a `string`, not `Record<string, never>`.
+
+The spec contradicts itself here: every affected field's own `@example` uses
+string values (`{ "cartId": "c_987" }`, `{ "customerId": "cus_1001", "plan":
+"gold" }`), and the prose instructs callers to "use opaque identifiers such as
+customerId or contractId". The examples are the intended contract; the
+`additionalProperties: { type: object }` schema is the bug. **Do not "correct"
+the SDK's `metadata` type back to match `api-1.yaml`** — that would restore the
+broken behaviour this entry documents. If a future spec revision fixes the
+schema, drop the override and use the generated type directly.
+
+Because `src/generated/api.ts` is never hand-edited (`codegen:check` enforces
+freshness in CI), the fix lives at the SDK-type layer: `ChariPayMetadata`
+(`src/types/metadata.ts`) is `Record<string, string | number | boolean |
+null>`, and a homomorphic mapped type, `WithMetadata<T>`, substitutes it for
+the generated `metadata` property on every affected request/response type
+(`CreatePaymentLinkParams`/`PaymentLink`, `CreateSubscriptionParams`/
+`Subscription`, `CreateRefundParams`, `CreateProductParams`/`Product`,
+`CreateCheckoutSessionParams`) while leaving every other property —
+including whether `metadata` itself is required or optional — untouched.
+Scalars only, not `Record<string, unknown>`: the spec calls these "opaque
+identifiers" and caps the serialized object at 4 KB, which scalars match and
+`unknown` would not meaningfully constrain. This is a types-only change —
+the object sent on the wire is unchanged, still serialised as-is by
+`JSON.stringify`.
+
 ### Subpath entries share one runtime copy
 
 `@chari-pay/sdk/webhooks`, `/express` and `/nestjs` import the package root by

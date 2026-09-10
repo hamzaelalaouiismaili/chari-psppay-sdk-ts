@@ -2,10 +2,11 @@ import type { components } from '../generated/api.js';
 import type { ChariPayFile } from '../file.js';
 import type { RequestOptions } from '../http.js';
 import type { PagePromise, PaginationParams } from '../pagination.js';
+import type { WithMetadata } from '../types/metadata.js';
 import { BaseResource } from './base.js';
 
-export type CreatePaymentLinkParams = components['schemas']['CreatePaymentLinkRequest'];
-export type PaymentLink = components['schemas']['PaymentLinkResponse'];
+export type CreatePaymentLinkParams = WithMetadata<components['schemas']['CreatePaymentLinkRequest']>;
+export type PaymentLink = WithMetadata<components['schemas']['PaymentLinkResponse']>;
 export type SendPaymentLinkParams = components['schemas']['SendPaymentLinkRequest'];
 
 export interface ListPaymentLinksParams extends PaginationParams {

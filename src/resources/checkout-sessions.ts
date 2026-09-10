@@ -1,9 +1,12 @@
 import type { components } from '../generated/api.js';
 import type { RequestOptions } from '../http.js';
 import type { PagePromise, PaginationParams } from '../pagination.js';
+import type { WithMetadata } from '../types/metadata.js';
 import { BaseResource } from './base.js';
 
-export type CreateCheckoutSessionParams = components['schemas']['CreateCheckoutSessionRequest'];
+// `metadata` sits at the top level of `CreateCheckoutSessionRequest`, a
+// sibling of `config` — not nested under it.
+export type CreateCheckoutSessionParams = WithMetadata<components['schemas']['CreateCheckoutSessionRequest']>;
 export type CheckoutSession = components['schemas']['CheckoutSessionView'];
 
 export interface ListCheckoutSessionsParams extends PaginationParams {

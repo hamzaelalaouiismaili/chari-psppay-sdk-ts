@@ -2,9 +2,10 @@ import type { components } from '../generated/api.js';
 import type { RequestOptions } from '../http.js';
 import type { PagePromise, PaginationParams } from '../pagination.js';
 import type { Refund } from '../types/gaps.js';
+import type { WithMetadata } from '../types/metadata.js';
 import { BaseResource } from './base.js';
 
-export type CreateRefundParams = components['schemas']['RefundPaymentRequest'];
+export type CreateRefundParams = WithMetadata<components['schemas']['RefundPaymentRequest']>;
 
 export interface ListRefundsParams extends PaginationParams {
   status?: string;

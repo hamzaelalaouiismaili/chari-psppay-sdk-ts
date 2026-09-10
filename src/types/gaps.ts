@@ -68,3 +68,19 @@ export interface TransactionTimelineEntry {
   message?: string;
   [key: string]: unknown;
 }
+
+/**
+ * `GET /v1/products/{reference}/orders` item.
+ * @remarks Not defined in api-1.yaml; modelled from the endpoint description.
+ * Verify against sandbox before 1.0.0.
+ */
+export interface ProductOrder {
+  reference?: string;
+  productReference?: string;
+  quantity?: number;
+  amount?: number;
+  status?: string;
+  customerName?: string;
+  createdAt?: string;
+  [key: string]: unknown;
+}

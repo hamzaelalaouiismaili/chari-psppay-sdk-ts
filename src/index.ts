@@ -19,6 +19,12 @@ export type {
 export type {
   CreateCheckoutSessionParams, ListCheckoutSessionsParams, CheckoutSession,
 } from './resources/checkout-sessions.js';
+export type {
+  CreateClientParams, UpdateClientParams, Client, ClientPaymentMethod, ListClientsParams,
+} from './resources/clients.js';
+export type {
+  CreateProductParams, UpdateProductParams, Product, ListProductsParams,
+} from './resources/products.js';
 export * from './errors.js';
 export * from './types/gaps.js';
 export type { components } from './generated/api.js';

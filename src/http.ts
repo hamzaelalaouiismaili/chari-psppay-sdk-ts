@@ -41,7 +41,7 @@ export interface ResolvedConfig {
   maxRetries: number;
   fetch: typeof fetch;
   debug: boolean;
-  webhookSecret?: string;
+  webhookSecret?: string | string[];
   onRequest?: (info: ChariPayRequestInfo) => void;
   onResponse?: (info: ChariPayResponseInfo) => void;
 }
@@ -115,6 +115,10 @@ export class HttpClient {
         if (result.response.ok || !retryable || !isRetryable(result.response.status) || attempt > maxRetries) {
           return result;
         }
+        // We are discarding this response in favour of a retry: consume its
+        // body so the underlying connection (undici keeps a socket open
+        // until the body is read or explicitly cancelled) is freed.
+        await drainResponse(result.response);
         await sleep(backoffMs(attempt, retryAfterSeconds(result.response)));
         continue;
       } catch (err) {
@@ -141,17 +145,41 @@ export class HttpClient {
     const headers = this.buildHeaders(req);
     const startedAt = Date.now();
 
-    this.cfg.onRequest?.({ method: req.method, url, headers: redact(headers), body: req.body, attempt });
+    this.cfg.onRequest?.({
+      method: req.method,
+      url,
+      headers: redact(headers),
+      body: redactBody(req.body),
+      attempt,
+    });
     if (this.cfg.debug) {
       // eslint-disable-next-line no-console
       console.error(`[chari-pay] → ${req.method} ${url} (attempt ${attempt})`);
     }
 
     const timeout = req.options?.timeout ?? this.cfg.timeout;
+    const callerSignal = req.options?.signal;
+
+    // A signal the caller already aborted before we even started must be
+    // honoured immediately — otherwise the `abort` event, which only fires
+    // on the 0→1 transition, never reaches our listener and the request
+    // goes out anyway.
+    if (callerSignal?.aborted) {
+      throw new ChariPayConnectionError(`Request to ${url} was aborted before it was sent.`, callerSignal.reason);
+    }
+
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    const onAbort = () => controller.abort();
-    req.options?.signal?.addEventListener('abort', onAbort);
+    let timedOut = false;
+    let userAborted = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeout);
+    const onAbort = () => {
+      userAborted = true;
+      controller.abort();
+    };
+    callerSignal?.addEventListener('abort', onAbort);
 
     let response: Response;
     try {
@@ -163,15 +191,23 @@ export class HttpClient {
       });
     } catch (cause) {
       const aborted = (cause as Error)?.name === 'AbortError';
-      throw new ChariPayConnectionError(
-        aborted
-          ? `Request to ${url} timed out after ${timeout}ms`
-          : `Could not reach Chari Pay at ${url}: ${(cause as Error)?.message ?? cause}`,
-        cause,
-      );
+      let message: string;
+      if (userAborted) {
+        // Distinguish a caller-initiated cancellation from a timeout — both
+        // surface as an AbortError from fetch, but they mean very different
+        // things to whoever is reading the error message.
+        message = `Request to ${url} was aborted by the caller.`;
+      } else if (aborted && timedOut) {
+        message = `Request to ${url} timed out after ${timeout}ms`;
+      } else if (aborted) {
+        message = `Request to ${url} was aborted.`;
+      } else {
+        message = `Could not reach Chari Pay at ${url}: ${(cause as Error)?.message ?? cause}`;
+      }
+      throw new ChariPayConnectionError(message, cause);
     } finally {
       clearTimeout(timer);
-      req.options?.signal?.removeEventListener('abort', onAbort);
+      callerSignal?.removeEventListener('abort', onAbort);
     }
 
     return { response, url, startedAt, attempt };
@@ -282,6 +318,19 @@ export function backoffMs(attempt: number, retryAfter?: number): number {
   return Math.max(1, Math.round(Math.random() * ceiling));
 }
 
+/**
+ * Consumes a response body we are about to discard (in favour of a retry)
+ * so the connection can be released back to the pool instead of held open.
+ * Best-effort: a body that fails to drain does not stop the retry.
+ */
+async function drainResponse(response: Response): Promise<void> {
+  try {
+    await response.arrayBuffer();
+  } catch {
+    /* the response is being discarded anyway */
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -294,4 +343,47 @@ function redact(headers: Record<string, string>): Record<string, string> {
     if (k.includes('api-key') || k === 'authorization' || k.includes('secret')) clone[key] = REDACTED;
   }
   return clone;
+}
+
+/**
+ * Field names (matched case-insensitively) whose value is unconditionally
+ * redacted before a request body ever reaches `onRequest`. `chari.checkout.submit`
+ * carries a raw card number and CVV in this shape — see docs/design.md §10:
+ * "API keys, PAN, and CVV redacted unconditionally".
+ */
+const SENSITIVE_BODY_FIELD_PATTERNS = [
+  /^pan$/i,
+  /^number$/i,
+  /^cardnumber$/i,
+  /^cvv$/i,
+  /^cvc$/i,
+  /^securitycode$/i,
+  /^expirydate$/i,
+  /^expiry$/i,
+  /secret/i,
+  /apikey/i,
+  /api_key/i,
+  /password/i,
+  /token/i,
+];
+
+function isSensitiveBodyField(key: string): boolean {
+  return SENSITIVE_BODY_FIELD_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+/**
+ * Recursively redacts sensitive fields from a request body before it is
+ * handed to `onRequest`. Never mutates `value` — always returns a fresh
+ * structure (or the original primitive, which is immutable anyway).
+ */
+export function redactBody(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => redactBody(item));
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = isSensitiveBodyField(key) ? REDACTED : redactBody(val);
+    }
+    return out;
+  }
+  return value;
 }

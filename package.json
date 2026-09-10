@@ -7,11 +7,11 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chari-pay/chari-pay-sdk.git"
+    "url": "git+https://github.com/hamzaelalaouiismaili/chari-psppay-sdk-ts.git"
   },
-  "homepage": "https://github.com/chari-pay/chari-pay-sdk#readme",
+  "homepage": "https://github.com/hamzaelalaouiismaili/chari-psppay-sdk-ts#readme",
   "bugs": {
-    "url": "https://github.com/chari-pay/chari-pay-sdk/issues"
+    "url": "https://github.com/hamzaelalaouiismaili/chari-psppay-sdk-ts/issues"
   },
   "engines": {
     "node": ">=18"

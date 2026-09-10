@@ -155,6 +155,14 @@ describe('ChariPayWebhookGuard misconfiguration: missing webhookSecret', () => {
   afterAll(async () => { await app.close(); });
 
   it('surfaces ChariPayWebhookSetupError as a 500, not a 400, and never calls the handler', async () => {
+    // As with the missing-rawBody case below, this asserts the observable
+    // contract only. A mutation test (`return true` on the
+    // `!this.options.webhookSecret` branch) showed this assertion still
+    // passes even with that check removed, because
+    // `@ChariPayEventPayload()` independently throws
+    // `ChariPayWebhookSetupError` when no event was stashed on the request.
+    // The 500/handler-not-called contract holds by defense in depth (guard +
+    // param decorator), not because this test isolates the guard's own check.
     const before = noSecretHandlerCalls.count;
     const body = JSON.stringify({ reference: 'pl_1' });
     // Signed with a secret the module was never given — proves this isn't
@@ -201,6 +209,15 @@ describe('ChariPayWebhookGuard misconfiguration: missing req.rawBody', () => {
   afterAll(async () => { await app.close(); });
 
   it('surfaces ChariPayWebhookSetupError as a 500, not a 400, and never calls the handler', async () => {
+    // This asserts the observable contract only (500, handler not invoked). It
+    // does not, on its own, prove the guard's `!Buffer.isBuffer(req.rawBody)`
+    // check is what produces that contract: a mutation test showed that if the
+    // guard's own check were regressed to `return true`, this assertion would
+    // still pass, because `@ChariPayEventPayload()` independently throws
+    // `ChariPayWebhookSetupError` when no event was stashed on the request.
+    // The contract holds because the guard and the param decorator enforce it
+    // jointly (defense in depth) — this test cannot distinguish "the guard
+    // caught it" from "the decorator caught it after the guard let it through".
     const before = noRawBodyHandlerCalls.count;
     const body = JSON.stringify({ reference: 'pl_1' });
     const res = await request(app.getHttpServer()).post('/webhooks/chari-pay').set(sign(body)).send(body);

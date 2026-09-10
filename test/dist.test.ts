@@ -61,15 +61,18 @@ describe('dist/ — CJS: a single copy of the runtime is shared across entry poi
     expect(ns.ChariPay).toBe(idx.ChariPay);
   });
 
-  it('the webhooks entry throws the SAME ChariPayError/ChariPaySignatureVerificationError classes as index', () => {
+  it('the webhooks entry throws the IDENTICAL ChariPaySignatureVerificationError class object as index (constructor identity, not just brand-satisfying instanceof)', () => {
     let caught: unknown;
     try {
       wh.verifyWebhookSignature({ rawBody: '{}', headers: {}, secret: SECRET });
     } catch (err) {
       caught = err;
     }
-    expect(caught).toBeInstanceOf(idx.ChariPaySignatureVerificationError);
-    expect(caught).toBeInstanceOf(idx.ChariPayError);
+    // `toBeInstanceOf` would pass even against a re-bundled copy of the class,
+    // because ChariPayError carries a Symbol.hasInstance brand that matches
+    // on shape/name rather than identity. `.constructor` identity is the
+    // check that actually catches two entry points shipping separate copies.
+    expect((caught as { constructor: unknown }).constructor).toBe(idx.ChariPaySignatureVerificationError);
   });
 
   it('express.cjs uses the SAME ChariPaySignatureVerificationError as index.cjs internally: a bad signature is 400, not 500', async () => {
@@ -149,15 +152,18 @@ describe('dist/ — ESM: a single copy of the runtime is shared across entry poi
     expect(ns.ChariPay).toBe(idx.ChariPay);
   });
 
-  it('the webhooks entry throws the SAME ChariPayError/ChariPaySignatureVerificationError classes as index', () => {
+  it('the webhooks entry throws the IDENTICAL ChariPaySignatureVerificationError class object as index (constructor identity, not just brand-satisfying instanceof)', () => {
     let caught: unknown;
     try {
       wh.verifyWebhookSignature({ rawBody: '{}', headers: {}, secret: SECRET });
     } catch (err) {
       caught = err;
     }
-    expect(caught).toBeInstanceOf(idx.ChariPaySignatureVerificationError);
-    expect(caught).toBeInstanceOf(idx.ChariPayError);
+    // `toBeInstanceOf` would pass even against a re-bundled copy of the class,
+    // because ChariPayError carries a Symbol.hasInstance brand that matches
+    // on shape/name rather than identity. `.constructor` identity is the
+    // check that actually catches two entry points shipping separate copies.
+    expect((caught as { constructor: unknown }).constructor).toBe(idx.ChariPaySignatureVerificationError);
   });
 
   it('express.js verifies and forwards a valid delivery end to end (a real call through the built ESM entry)', async () => {

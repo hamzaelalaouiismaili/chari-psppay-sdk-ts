@@ -101,6 +101,20 @@ identifiers" and caps the serialized object at 4 KB, which scalars match and
 the object sent on the wire is unchanged, still serialised as-is by
 `JSON.stringify`.
 
+### `PagePromise` implements the full `Promise` interface
+
+`PagePromise<T>` used to implement only `PromiseLike<Page<T>>` (just `then`),
+so `await` worked but `.catch()`, `.finally()`, `Promise.all([...])`, and any
+`Promise<T>`-typed position all failed to typecheck — a real call site broke
+on exactly this (`const p: Promise<unknown> = chari.transactions.list()`).
+
+`PagePromise<T>` now `implements Promise<Page<T>>`, adding `catch`, `finally`
+and `[Symbol.toStringTag]`. The laziness that matters is unchanged: the
+constructor never calls `fetchPage`; the underlying request still only fires
+when the promise is actually consumed (`then`/`catch`/`finally`/`await`) or
+iterated. `catch` and `finally` are implemented by delegating through `then`
+to a native `Promise`, not by eagerly resolving in the constructor.
+
 ### Subpath entries share one runtime copy
 
 `@chari-pay/sdk/webhooks`, `/express` and `/nestjs` import the package root by

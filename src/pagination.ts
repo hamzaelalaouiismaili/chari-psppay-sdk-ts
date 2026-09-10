@@ -25,27 +25,36 @@ export function toPage<T>(raw: unknown, requestedPage: number): Page<T> {
 
 /**
  * The return type of every `list()`. Awaiting it yields one page; iterating it
- * walks every page transparently.
+ * walks every page transparently. It is a real `Promise<Page<T>>` — `.catch()`,
+ * `.finally()`, `Promise.all([...])` and any `Promise<T>`-typed position all
+ * work — while staying lazy: the underlying request is not issued until the
+ * promise is actually consumed (via `then`/`catch`/`finally`/`await`) or
+ * iterated, never from the constructor.
  *
  * ```ts
  * const page = await chari.transactions.list();          // one page
  * for await (const tx of chari.transactions.list()) {}   // all of them
+ * chari.transactions.list().catch((err) => { ... });     // real Promise methods
  * ```
  */
-export class PagePromise<T> implements PromiseLike<Page<T>> {
+export class PagePromise<T> implements Promise<Page<T>> {
+  readonly [Symbol.toStringTag] = 'Promise';
+
   constructor(private readonly fetchPage: (page: number) => Promise<Page<T>>) {}
 
   then<R1 = Page<T>, R2 = never>(
     onfulfilled?: ((value: Page<T>) => R1 | PromiseLike<R1>) | null,
     onrejected?: ((reason: unknown) => R2 | PromiseLike<R2>) | null,
-  ): PromiseLike<R1 | R2> {
-    return this.fetchPage(0).then(
-      (raw) => {
-        const page = toPage<T>(raw, 0);
-        return onfulfilled ? onfulfilled(page) : (page as unknown as R1);
-      },
-      onrejected,
-    );
+  ): Promise<R1 | R2> {
+    return this.fetchPage(0).then((raw) => toPage<T>(raw, 0)).then(onfulfilled, onrejected);
+  }
+
+  catch<R = never>(onrejected?: ((reason: unknown) => R | PromiseLike<R>) | null): Promise<Page<T> | R> {
+    return this.then(undefined, onrejected);
+  }
+
+  finally(onfinally?: (() => void) | null): Promise<Page<T>> {
+    return this.then().finally(onfinally);
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<T> {

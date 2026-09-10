@@ -129,7 +129,7 @@ Calling with the same key again returns the first result rather than making a se
 
 ## Pagination
 
-`list()` returns a `PagePromise`: `await` it for one page, `for await` it for everything.
+`list()` returns a `PagePromise`, a real `Promise<Page<T>>`: `await` it for one page, `for await` it for everything, or use `.catch()` / `.finally()` / `Promise.all([...])` like any other promise. The underlying request is still only issued once you actually consume it — the object returned by `list()` does nothing on its own.
 
 ```ts
 const page = await chari.transactions.list();      // one page
@@ -141,6 +141,9 @@ for await (const tx of chari.transactions.list()) { // every page, transparently
 
 // Collect up to a bound, so you never accidentally pull a year of history into memory.
 const recent = await chari.transactions.list().autoPagingToArray({ limit: 500 });
+
+// A normal Promise: .catch(), .finally() and Promise.all([...]) all work.
+chari.transactions.list().catch((err) => console.error(err));
 ```
 
 ## Metadata

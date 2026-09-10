@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { PagePromise, type Page } from '../src/pagination.js';
 
 /** Three pages of two items: 1..5. */
@@ -84,5 +84,83 @@ describe('PagePromise', () => {
   it('tolerates a bare array response', async () => {
     const page = await new PagePromise(async () => [7, 8] as unknown as Page<number>);
     expect(page.content).toEqual([7, 8]);
+  });
+});
+
+/**
+ * Before the fix, `PagePromise` implemented only `PromiseLike` (just `then`),
+ * so `await` worked but `.catch()`, `.finally()`, `Promise.all([...])` and any
+ * `Promise<T>`-typed position all failed to typecheck. These assertions are
+ * enforced by `tsc --noEmit` — `vitest run` strips types before executing —
+ * so the runtime pass alone does not prove them; both must pass.
+ */
+describe('PagePromise is a real Promise<Page<T>>', () => {
+  it('is assignable to Promise<Page<T>> (the type-level fix)', () => {
+    expectTypeOf(new PagePromise(fakePages())).toMatchTypeOf<Promise<Page<number>>>();
+    const p: Promise<Page<number>> = new PagePromise(fakePages());
+    expectTypeOf(p).toEqualTypeOf<Promise<Page<number>>>();
+  });
+
+  it('is accepted by Promise.all', async () => {
+    const [page, n] = await Promise.all([new PagePromise(fakePages()), Promise.resolve(1)]);
+    expect(page.content).toEqual([1, 2]);
+    expect(n).toBe(1);
+  });
+
+  it('.catch() catches a rejection', async () => {
+    const boom = new Error('boom');
+    const fetcher = vi.fn(async (_page: number) => {
+      throw boom;
+    });
+    const caught = await new PagePromise<number>(fetcher).catch((err) => err);
+    expect(caught).toBe(boom);
+  });
+
+  it('a successful PagePromise never reaches .catch()', async () => {
+    const onRejected = vi.fn();
+    const page = await new PagePromise(fakePages()).catch(onRejected);
+    expect(onRejected).not.toHaveBeenCalled();
+    expect((page as Page<number>).content).toEqual([1, 2]);
+  });
+
+  it('.finally() runs on success and does not change the resolved value', async () => {
+    const onFinally = vi.fn();
+    const page = await new PagePromise(fakePages()).finally(onFinally);
+    expect(onFinally).toHaveBeenCalledTimes(1);
+    expect(page.content).toEqual([1, 2]);
+  });
+
+  it('.finally() runs on rejection and the rejection still propagates', async () => {
+    const boom = new Error('boom');
+    const onFinally = vi.fn();
+    const fetcher = vi.fn(async (_page: number) => {
+      throw boom;
+    });
+    await expect(new PagePromise<number>(fetcher).finally(onFinally)).rejects.toBe(boom);
+    expect(onFinally).toHaveBeenCalledTimes(1);
+  });
+
+  it('[Symbol.toStringTag] is present, like a native Promise', () => {
+    expect(new PagePromise(fakePages())[Symbol.toStringTag]).toBe('Promise');
+  });
+
+  it('stays lazy: the constructor does not fetch until consumed', async () => {
+    const fetcher = vi.fn(fakePages());
+    const pending = new PagePromise(fetcher);
+    expect(fetcher).not.toHaveBeenCalled();
+    await pending;
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('await, iteration and autoPagingToArray still behave exactly as before', async () => {
+    const page = await new PagePromise(fakePages());
+    expect(page.content).toEqual([1, 2]);
+
+    const seen: number[] = [];
+    for await (const item of new PagePromise(fakePages())) seen.push(item);
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+
+    const all = await new PagePromise(fakePages()).autoPagingToArray({ limit: 4 });
+    expect(all).toEqual([1, 2, 3, 4]);
   });
 });

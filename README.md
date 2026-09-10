@@ -20,22 +20,45 @@ const link = await chari.paymentLinks.create({ amount: 149.9, description: 'Orde
 console.log(link.payUrl); // send the buyer here
 ```
 
+> If your key doesn't start with `chari_sk_test_` or `chari_sk_live_` (for example a
+> `flex_…` sandbox key), the line above throws — pass `baseUrl` explicitly instead:
+> `new ChariPay({ apiKey: process.env.CHARI_PAY_API_KEY!, baseUrl: '<your sandbox or production URL>' })`.
+> See [Environments](#environments).
+
 `amount` and `description` are both required on `paymentLinks.create` — the API rejects a request missing either.
 
 ## Environments
 
-The client infers sandbox vs. production from the key you pass:
+The client can only infer sandbox vs. production from a key whose prefix is
+unambiguous. Chari Pay's server, not the key's shape, is the actual source of
+truth for which environment a key belongs to, so inference is a convenience
+for the two prefixes we know about — never a guess for anything else:
 
 ```ts
-resolveBaseUrl(apiKey) // apiKey.startsWith('chari_sk_test_') ? sandbox : production
+resolveBaseUrl(apiKey)
+// 'chari_sk_test_…' → sandbox
+// 'chari_sk_live_…' → production
+// anything else      → throws TypeError
 ```
 
 | Key prefix | Base URL |
 | --- | --- |
 | `chari_sk_test_…` | `https://chari-pay-api.mobileappexpert.dev` (sandbox) |
-| anything else | `https://api.chari.ma` (production) |
+| `chari_sk_live_…` | `https://api.chari.ma` (production) |
+| anything else (e.g. `flex_…`) | not inferred — construction throws unless you pass `baseUrl` |
 
-Override it explicitly, e.g. to point at a local mock:
+If your key doesn't match one of the two recognised prefixes, pass `baseUrl`
+explicitly — this is required, not optional, for those keys:
+
+```ts
+const chari = new ChariPay({
+  apiKey: process.env.CHARI_PAY_API_KEY!,
+  baseUrl: 'https://chari-pay-api.mobileappexpert.dev', // sandbox
+  // baseUrl: 'https://api.chari.ma', // production
+});
+```
+
+`baseUrl` also works as an override for any key, e.g. to point at a local mock:
 
 ```ts
 const chari = new ChariPay({ apiKey: process.env.CHARI_PAY_API_KEY!, baseUrl: 'http://localhost:4000' });
@@ -314,7 +337,9 @@ const chari = new ChariPay({
 
 ## Going to production
 
-1. Swap `CHARI_PAY_API_KEY` for a production key (no `chari_sk_test_` prefix) — the base URL follows automatically.
+1. Swap `CHARI_PAY_API_KEY` for a production key. If it's a `chari_sk_live_…` key,
+   the base URL follows automatically; for any other key format, set `baseUrl`
+   explicitly to `https://api.chari.ma` (see [Environments](#environments)).
 2. Re-register your webhook endpoints against production with `chari.webhookEndpoints.create(...)`; sandbox and production endpoints and secrets are independent.
 3. Rotate a webhook secret with `chari.webhookEndpoints.rotateSecret(id)` when you need to. During rotation Chari Pay signs every delivery with **both** the old and new secrets, so keep verifying against either until you've finished deploying the new one everywhere.
 

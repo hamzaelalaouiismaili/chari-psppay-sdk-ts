@@ -34,6 +34,32 @@ an `apiKey` to construct the client; any non-empty placeholder works, since it i
 never sent on those calls. Kept mandatory for 1.0 to avoid a config shape whose
 validity depends on which methods you happen to call.
 
+### Environment inference is deliberately narrow, and fails closed
+
+`resolveBaseUrl` recognises exactly two key prefixes — `chari_sk_test_`
+(sandbox) and `chari_sk_live_` (production) — and throws a `TypeError` for
+anything else, including real Chari Pay sandbox keys shaped like
+`flex_…`.
+
+This is narrower than it looks like it should be. The obvious alternative —
+guess sandbox vs. production from whatever the key's shape suggests — is
+unsound in principle: Chari Pay's server, not the key's shape, is the actual
+source of truth for which environment a key belongs to. An early version of
+this SDK inferred production for any key that didn't match a placeholder
+pattern seen in one tester app's `.env.example`; a real sandbox key of a
+different shape fell through to that default, so a developer following the
+README exactly would have silently pointed sandbox traffic at production.
+That is the worst failure mode a payments SDK can have — quiet, and toward
+the environment where mistakes cost money.
+
+Defaulting to sandbox instead would be equally wrong the other way: real
+payments would quietly go nowhere. So the only defensible move for a key
+whose environment can't be proven from its prefix is to refuse to guess.
+`resolveBaseUrl` throws, naming both `SANDBOX_BASE_URL` and
+`PRODUCTION_BASE_URL` and showing the `new ChariPay({ apiKey, baseUrl })`
+fix, and an explicit `baseUrl` is the supported path for any key format the
+two recognised prefixes don't cover.
+
 ### Pagination trusts the server's `Page.number`
 
 Iteration decides it has reached the last page using the server-reported

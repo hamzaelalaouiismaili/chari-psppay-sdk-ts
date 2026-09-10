@@ -11,8 +11,28 @@ describe('ChariPay configuration', () => {
     expect(resolveBaseUrl('chari_sk_test_EXAMPLE')).toBe(SANDBOX_BASE_URL);
   });
 
-  it('infers production from any other key', () => {
+  it('infers production from a live key', () => {
     expect(resolveBaseUrl('chari_sk_live_EXAMPLE')).toBe(PRODUCTION_BASE_URL);
+  });
+
+  it('throws on an unrecognised key prefix, naming baseUrl', () => {
+    expect(() => resolveBaseUrl('flex_EXAMPLE')).toThrow(/baseUrl/);
+    expect(() => new ChariPay('flex_EXAMPLE')).toThrow(/baseUrl/);
+  });
+
+  it('constructs fine with an unrecognised key when baseUrl is given explicitly', async () => {
+    const fetchMock = vi.fn(async (_input?: string | URL | Request, _init?: RequestInit) =>
+      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    const chari = new ChariPay({
+      apiKey: 'flex_EXAMPLE',
+      baseUrl: 'http://localhost:9999',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(chari.config.baseUrl).toBe('http://localhost:9999');
+    await chari.wallet.balance();
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('http://localhost:9999/v1/wallet');
   });
 
   it('lets an explicit baseUrl win', async () => {

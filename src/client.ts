@@ -16,15 +16,42 @@ import { Webhooks } from './webhooks.js';
 export const SANDBOX_BASE_URL = 'https://chari-pay-api.mobileappexpert.dev';
 export const PRODUCTION_BASE_URL = 'https://api.chari.ma';
 
-/** Sandbox keys are prefixed; everything else is production. */
+/**
+ * Infers the base URL from a recognised key prefix.
+ *
+ * Chari Pay's server — not the key's shape — is the actual source of truth for
+ * which environment a key belongs to, so this can only be sound for the two
+ * prefixes it knows about: `chari_sk_test_` (sandbox) and `chari_sk_live_`
+ * (production). Any other prefix throws a `TypeError` rather than guessing —
+ * silently resolving to production for an unrecognised key would risk routing
+ * real traffic somewhere the caller never chose.
+ *
+ * @throws {TypeError} if `apiKey` does not start with `chari_sk_test_` or
+ *   `chari_sk_live_`. Pass `baseUrl` explicitly in that case.
+ */
 export function resolveBaseUrl(apiKey: string): string {
-  return apiKey.startsWith('chari_sk_test_') ? SANDBOX_BASE_URL : PRODUCTION_BASE_URL;
+  if (apiKey.startsWith('chari_sk_test_')) return SANDBOX_BASE_URL;
+  if (apiKey.startsWith('chari_sk_live_')) return PRODUCTION_BASE_URL;
+
+  throw new TypeError(
+    `ChariPay could not infer the environment from this API key. ` +
+      `Only 'chari_sk_test_' (sandbox) and 'chari_sk_live_' (production) prefixes are recognised. ` +
+      `Pass the base URL explicitly instead: new ChariPay({ apiKey, baseUrl: '${SANDBOX_BASE_URL}' }) ` +
+      `for sandbox, or new ChariPay({ apiKey, baseUrl: '${PRODUCTION_BASE_URL}' }) for production.`,
+  );
 }
 
 export interface ChariPayConfig {
-  /** Your secret key. The prefix decides sandbox vs production. */
+  /**
+   * Your secret key. For `chari_sk_test_…` / `chari_sk_live_…` keys, the
+   * prefix decides sandbox vs production. Any other key format requires
+   * `baseUrl` to be set explicitly — see {@link resolveBaseUrl}.
+   */
   apiKey: string;
-  /** Overrides the inferred base URL. Useful for a local mock. */
+  /**
+   * Overrides the inferred base URL. Useful for a local mock, and required
+   * when `apiKey` isn't a recognised `chari_sk_test_…` / `chari_sk_live_…` key.
+   */
   baseUrl?: string;
   /** Per-request timeout in ms. Default 30000. */
   timeout?: number;

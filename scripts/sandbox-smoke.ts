@@ -4,10 +4,16 @@
  * Run with a sandbox key in the environment:
  *   CHARI_PAY_API_KEY=… npx tsx scripts/sandbox-smoke.ts
  *
+ * `baseUrl` is set explicitly to SANDBOX_BASE_URL below (overridable via
+ * CHARI_PAY_BASE_URL) rather than inferred from the key, since this script is
+ * sandbox-only by definition and real sandbox keys aren't always shaped like
+ * `chari_sk_test_…` (e.g. `flex_…`), which `resolveBaseUrl` doesn't recognise
+ * and would otherwise reject. See docs/DECISIONS.md.
+ *
  * It also reports which hand-modelled types in src/types/gaps.ts still need
  * verifying — the open question the design doc leaves for 1.0.0.
  */
-import { ChariPay } from '../src/index.js';
+import { ChariPay, SANDBOX_BASE_URL } from '../src/index.js';
 
 const apiKey = process.env.CHARI_PAY_API_KEY;
 if (!apiKey) {
@@ -15,7 +21,7 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const chari = new ChariPay({ apiKey, debug: true });
+const chari = new ChariPay({ apiKey, baseUrl: process.env.CHARI_PAY_BASE_URL ?? SANDBOX_BASE_URL, debug: true });
 
 async function main() {
   const balance = await chari.wallet.balance();

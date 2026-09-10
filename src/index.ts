@@ -41,3 +41,7 @@ export type {
 export * from './errors.js';
 export * from './types/gaps.js';
 export type { components } from './generated/api.js';
+export { Webhooks, verifyWebhookSignature, parseEvent, SIGNATURE_TOLERANCE_MS } from './webhooks.js';
+export type { HeaderBag, VerifyOptions } from './webhooks.js';
+export { CHARI_PAY_EVENT_TYPES } from './types/events.js';
+export type { ChariPayEvent, ChariPayEventType } from './types/events.js';

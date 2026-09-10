@@ -11,6 +11,7 @@ import { TransactionsResource } from './resources/transactions.js';
 import { WalletResource } from './resources/wallet.js';
 import { WebhookEndpointsResource } from './resources/webhook-endpoints.js';
 import { WebhookEventsResource } from './resources/webhook-events.js';
+import { Webhooks } from './webhooks.js';
 
 export const SANDBOX_BASE_URL = 'https://chari-pay-api.mobileappexpert.dev';
 export const PRODUCTION_BASE_URL = 'https://api.chari.ma';
@@ -63,6 +64,7 @@ export class ChariPay {
   readonly analytics: AnalyticsResource;
   readonly webhookEndpoints: WebhookEndpointsResource;
   readonly webhookEvents: WebhookEventsResource;
+  readonly webhooks: Webhooks;
 
   constructor(config: ChariPayConfig | string) {
     const input: ChariPayConfig = typeof config === 'string' ? { apiKey: config } : config ?? ({} as ChariPayConfig);
@@ -102,6 +104,7 @@ export class ChariPay {
     this.analytics = new AnalyticsResource(this.http);
     this.webhookEndpoints = new WebhookEndpointsResource(this.http);
     this.webhookEvents = new WebhookEventsResource(this.http);
+    this.webhooks = new Webhooks(this.config.webhookSecret);
   }
 
   /** True when the key resolved to the sandbox environment. */

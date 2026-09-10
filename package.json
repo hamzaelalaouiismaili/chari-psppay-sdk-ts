@@ -19,6 +19,19 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "webhooks": [
+        "./dist/webhooks.d.ts"
+      ],
+      "express": [
+        "./dist/express.d.ts"
+      ],
+      "nestjs": [
+        "./dist/nestjs.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

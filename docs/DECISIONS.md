@@ -128,6 +128,18 @@ re-bundling regressed.
 
 ---
 
+### `billingTime` is a string, not the generated `LocalTime` object
+
+`api-1.yaml` types a subscription's `billingTime` as `$ref: LocalTime` — a
+Java-shaped `{ hour?, minute?, second?, nano? }` object — while the very same
+field carries `example: 09:00`, a string. The `example_psp` tester app, proven
+against the live sandbox, sends it as an `HH:mm` string.
+
+As with `metadata`, the examples are the real contract and the schema is the
+bug. `ChariPayLocalTime` overrides it at the SDK-type layer; the wire format is
+unchanged. Both overrides are types-only and both are listed here so nobody
+"corrects" them back to match the spec.
+
 ## Known limitations
 
 Real, understood, and not fixed. Ranked by how likely they are to matter.

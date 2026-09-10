@@ -2,11 +2,15 @@ import type { components } from '../generated/api.js';
 import type { RequestOptions } from '../http.js';
 import type { PagePromise, PaginationParams } from '../pagination.js';
 import type { SubscriptionCharge } from '../types/gaps.js';
-import type { WithMetadata } from '../types/metadata.js';
+import type { WithLocalTime, WithMetadata } from '../types/metadata.js';
 import { BaseResource } from './base.js';
 
-export type CreateSubscriptionParams = WithMetadata<components['schemas']['CreateSubscriptionRequest']>;
-export type Subscription = WithMetadata<components['schemas']['SubscriptionResponse']>;
+export type CreateSubscriptionParams = WithLocalTime<
+  WithMetadata<components['schemas']['CreateSubscriptionRequest']>
+>;
+export type Subscription = WithLocalTime<
+  WithMetadata<components['schemas']['SubscriptionResponse']>
+>;
 export type SelectSubscriptionPaymentMethodParams =
   components['schemas']['SelectSubscriptionPaymentMethodRequest'];
 export type SubscriptionAutoPayTestResult = components['schemas']['SubscriptionAutoPayTestResponse'];

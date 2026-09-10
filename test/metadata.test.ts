@@ -126,3 +126,22 @@ describe('metadata (runtime — value reaches fetch unchanged)', () => {
     expect(sentBody(calls[0]!)).toMatchObject({ metadata: { cartId: 'c_987', source: 'web' } });
   });
 });
+
+describe('billingTime (LocalTime spec override)', () => {
+  it('accepts the "HH:mm" string the API actually takes', () => {
+    const params: CreateSubscriptionParams = {
+      clientId: 'cl_1',
+      amount: 99,
+      description: 'Monthly plan',
+      frequency: 'MONTHLY',
+      startDate: '2026-01-01',
+      channels: ['EMAIL'],
+      billingTime: '09:00',
+    } as CreateSubscriptionParams;
+    expect(params.billingTime).toBe('09:00');
+  });
+
+  it('types billingTime as a string, not the generated LocalTime object', () => {
+    expectTypeOf<CreateSubscriptionParams['billingTime']>().toEqualTypeOf<string | undefined>();
+  });
+});

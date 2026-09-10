@@ -45,3 +45,29 @@ export type ChariPayMetadata = Record<string, string | number | boolean | null>;
 export type WithMetadata<T> = {
   [K in keyof T]: K extends 'metadata' ? ChariPayMetadata : T[K];
 };
+
+/**
+ * Wire type for Chari Pay's `LocalTime` fields (e.g. a subscription's
+ * `billingTime`): a plain `"HH:mm"` / `"HH:mm:ss"` string.
+ *
+ * Same class of spec bug as {@link ChariPayMetadata}. `api-1.yaml` declares
+ * `billingTime` as `$ref: LocalTime`, a Java-shaped object
+ * `{ hour?, minute?, second?, nano? }`, while the very same field carries
+ * `example: 09:00` — a string. The examples are the real contract: the
+ * `example_psp` tester app, which is proven against the live sandbox, sends
+ * `billingTime` as an `HH:mm` string validated by a regex.
+ *
+ * `src/generated/api.ts` is never hand-edited, so the shape is corrected here
+ * at the SDK-type layer. Types only — nothing about the request body changes.
+ * See docs/DECISIONS.md; do not "correct" this back to match `api-1.yaml`.
+ */
+export type ChariPayLocalTime = string;
+
+/**
+ * Replaces a generated type's `billingTime` property with
+ * {@link ChariPayLocalTime}, preserving every other property and its
+ * optional/readonly modifiers.
+ */
+export type WithLocalTime<T> = {
+  [K in keyof T]: K extends 'billingTime' ? ChariPayLocalTime : T[K];
+};

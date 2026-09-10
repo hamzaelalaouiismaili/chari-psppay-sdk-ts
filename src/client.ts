@@ -1,4 +1,5 @@
 import { HttpClient, type ChariPayRequestInfo, type ChariPayResponseInfo, type ResolvedConfig } from './http.js';
+import { PaymentLinksResource } from './resources/payment-links.js';
 import { TransactionsResource } from './resources/transactions.js';
 import { WalletResource } from './resources/wallet.js';
 
@@ -43,6 +44,7 @@ export class ChariPay {
 
   readonly wallet: WalletResource;
   readonly transactions: TransactionsResource;
+  readonly paymentLinks: PaymentLinksResource;
 
   constructor(config: ChariPayConfig | string) {
     const input: ChariPayConfig = typeof config === 'string' ? { apiKey: config } : config ?? ({} as ChariPayConfig);
@@ -72,6 +74,7 @@ export class ChariPay {
     this.http = new HttpClient(this.config);
     this.wallet = new WalletResource(this.http);
     this.transactions = new TransactionsResource(this.http);
+    this.paymentLinks = new PaymentLinksResource(this.http);
   }
 
   /** True when the key resolved to the sandbox environment. */

@@ -4,6 +4,9 @@ export type { RequestOptions, ChariPayRequestInfo, ChariPayResponseInfo } from '
 export type { ChariPayFile } from './file.js';
 export { PagePromise } from './pagination.js';
 export type { Page, PaginationParams } from './pagination.js';
+export type {
+  CreatePaymentLinkParams, ListPaymentLinksParams, PaymentLink, SendPaymentLinkParams,
+} from './resources/payment-links.js';
 export type { ListTransactionsParams } from './resources/transactions.js';
 export * from './errors.js';
 export * from './types/gaps.js';

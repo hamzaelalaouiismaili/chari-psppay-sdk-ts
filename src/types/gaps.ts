@@ -6,6 +6,11 @@
  * type here and use the generated one instead.
  */
 
+import type { components } from '../generated/api.js';
+
+/** `GET /checkout/payments/{reference}` — the spec defines this one. */
+export type PublicPaymentStatus = components['schemas']['PublicPaymentStatusResponse'];
+
 /**
  * `GET /v1/wallet`
  * @remarks Not defined in api-1.yaml; modelled from the endpoint description.

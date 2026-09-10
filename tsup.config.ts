@@ -5,6 +5,7 @@ export default defineConfig({
     index: 'src/index.ts',
     webhooks: 'src/webhooks.ts',
     express: 'adapters/express.ts',
+    nestjs: 'adapters/nestjs.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

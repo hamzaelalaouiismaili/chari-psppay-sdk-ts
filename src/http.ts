@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ChariPayConnectionError, errorFromResponse } from './errors.js';
+import { makeFile, parseFilename, type ChariPayFile } from './file.js';
 
 /** Options every resource method accepts as its final argument. */
 export interface RequestOptions {
@@ -208,6 +209,40 @@ export class HttpClient {
       throw errorFromResponse(response.status, body, req.options?.requestId, retryAfterSeconds(response));
     }
     return body as T | undefined;
+  }
+
+  /**
+   * Fetches a binary document. Errors still arrive as JSON, so a failure is
+   * decoded and thrown through the same typed hierarchy as everything else.
+   */
+  async requestBinary(req: InternalRequest): Promise<ChariPayFile> {
+    const { response, url, startedAt, attempt } = await this.send(req);
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    if (!response.ok) {
+      let body: unknown = buffer.toString('utf8').slice(0, 2000);
+      try {
+        body = JSON.parse(body as string);
+      } catch {
+        /* keep the truncated text */
+      }
+      this.cfg.onResponse?.({
+        method: req.method, url, status: response.status,
+        durationMs: Date.now() - startedAt, attempt,
+      });
+      throw errorFromResponse(response.status, body, req.options?.requestId, retryAfterSeconds(response));
+    }
+
+    this.cfg.onResponse?.({
+      method: req.method, url, status: response.status,
+      durationMs: Date.now() - startedAt, attempt,
+    });
+
+    return makeFile(
+      buffer,
+      response.headers.get('content-type') ?? 'application/octet-stream',
+      parseFilename(response.headers.get('content-disposition')),
+    );
   }
 }
 

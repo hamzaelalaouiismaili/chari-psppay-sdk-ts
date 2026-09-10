@@ -27,11 +27,22 @@ export interface VerifyOptions {
   /** The untouched request bytes. Re-serialising a parsed body changes the digest. */
   rawBody: string | Buffer;
   headers: HeaderBag;
-  secret: string;
+  /**
+   * One secret, or several. During a secret rotation Chari Pay signs every
+   * delivery with BOTH the old and the new secret until the rotation
+   * finishes, so pass both (e.g. `[newSecret, oldSecret]`) and verification
+   * succeeds if ANY of them matches.
+   */
+  secret: string | string[];
   /** Defaults to 300000 ms. */
   toleranceMs?: number;
   /** Injectable clock, for tests. */
   now?: number;
+}
+
+function toSecretList(secret: string | string[] | undefined): string[] {
+  if (secret === undefined) return [];
+  return (Array.isArray(secret) ? secret : [secret]).filter((s): s is string => Boolean(s));
 }
 
 /**
@@ -40,13 +51,18 @@ export interface VerifyOptions {
  * The signed string is `"<timestamp>.<rawBody>"`, and the timestamp is epoch
  * **milliseconds** — not seconds. Throws `ChariPaySignatureVerificationError`
  * on any failure; returns silently on success.
+ *
+ * `secret` accepts a single string or an array — during a rotation, Chari Pay
+ * signs with both the old and new secret, so pass both and verification
+ * succeeds against either.
  */
 export function verifyWebhookSignature(opts: VerifyOptions): void {
-  const { rawBody, headers, secret } = opts;
+  const { rawBody, headers } = opts;
+  const secrets = toSecretList(opts.secret);
   const toleranceMs = opts.toleranceMs ?? SIGNATURE_TOLERANCE_MS;
   const now = opts.now ?? Date.now();
 
-  if (!secret) {
+  if (secrets.length === 0) {
     throw new ChariPaySignatureVerificationError('No webhook secret provided; cannot verify the delivery.');
   }
 
@@ -72,12 +88,20 @@ export function verifyWebhookSignature(opts: VerifyOptions): void {
   }
 
   const body = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
-  const expected = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
-
-  // timingSafeEqual throws on a length mismatch, so screen that first.
   const provided = Buffer.from(signature, 'hex');
-  const expectedBuf = Buffer.from(expected, 'hex');
-  if (provided.length !== expectedBuf.length || !timingSafeEqual(expectedBuf, provided)) {
+
+  // Check every candidate secret — a rotation delivery is signed with both
+  // the old and new secret, so any match verifies it. Each candidate goes
+  // through the same length-then-timingSafeEqual comparison as the
+  // single-secret path did, so this adds no timing signal beyond what
+  // already existed per secret.
+  const matched = secrets.some((secret) => {
+    const expected = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+    const expectedBuf = Buffer.from(expected, 'hex');
+    return provided.length === expectedBuf.length && timingSafeEqual(expectedBuf, provided);
+  });
+
+  if (!matched) {
     throw new ChariPaySignatureVerificationError(
       'Webhook signature does not match. Confirm the secret, and that the raw request body reached the verifier unmodified.',
     );
@@ -119,7 +143,7 @@ export function parseEvent(rawBody: string | Buffer, headers: HeaderBag): ChariP
 
 /** `chari.webhooks` — verification and parsing, bound to the client's secret. */
 export class Webhooks {
-  constructor(private readonly defaultSecret?: string) {}
+  constructor(private readonly defaultSecret?: string | string[]) {}
 
   /**
    * Verifies and parses a delivery in one call.
@@ -127,21 +151,24 @@ export class Webhooks {
    * ```ts
    * const event = chari.webhooks.constructEvent(req.rawBody, req.headers);
    * ```
+   *
+   * `secret` (and the client's `webhookSecret`) accept a single string or an
+   * array — pass both the old and new secret while a rotation is in flight.
    */
-  constructEvent(rawBody: string | Buffer, headers: HeaderBag, secret?: string): ChariPayEvent {
+  constructEvent(rawBody: string | Buffer, headers: HeaderBag, secret?: string | string[]): ChariPayEvent {
     const resolved = secret ?? this.defaultSecret;
-    if (!resolved) {
+    if (toSecretList(resolved).length === 0) {
       throw new ChariPaySignatureVerificationError(
         'No webhook secret. Pass one to constructEvent, or set `webhookSecret` on the ChariPay client.',
       );
     }
-    verifyWebhookSignature({ rawBody, headers, secret: resolved });
+    verifyWebhookSignature({ rawBody, headers, secret: resolved as string | string[] });
     return parseEvent(rawBody, headers);
   }
 
   /** Verification only, when you want to parse the body yourself. */
-  verify(rawBody: string | Buffer, headers: HeaderBag, secret?: string): void {
-    verifyWebhookSignature({ rawBody, headers, secret: secret ?? this.defaultSecret ?? '' });
+  verify(rawBody: string | Buffer, headers: HeaderBag, secret?: string | string[]): void {
+    verifyWebhookSignature({ rawBody, headers, secret: (secret ?? this.defaultSecret ?? '') as string | string[] });
   }
 }
 

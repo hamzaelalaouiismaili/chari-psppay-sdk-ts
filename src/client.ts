@@ -31,7 +31,7 @@ export interface ChariPayConfig {
   /** Retries for retryable failures. Default 2. */
   maxRetries?: number;
   /** Default secret for `chari.webhooks.constructEvent`. */
-  webhookSecret?: string;
+  webhookSecret?: string | string[];
   /** Custom fetch, for tests, proxies, or tracing. */
   fetch?: typeof fetch;
   /** Log requests and responses to stderr, credentials redacted. */

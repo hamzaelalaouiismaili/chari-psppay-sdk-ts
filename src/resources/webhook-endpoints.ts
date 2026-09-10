@@ -47,7 +47,14 @@ export class WebhookEndpointsResource extends BaseResource {
   /**
    * Issues a new signing secret. During rotation Chari Pay signs deliveries
    * with both the old and new secrets, so verify against either until you have
-   * finished deploying.
+   * finished deploying: pass both to `verifyWebhookSignature` / `Webhooks` /
+   * `ChariPayConfig.webhookSecret` / the Express and NestJS adapters — every
+   * one of them accepts `string | string[]` for exactly this reason, and
+   * verification succeeds if any supplied secret matches.
+   *
+   * ```ts
+   * chari.webhooks.verify(rawBody, headers, [newSecret, oldSecret]);
+   * ```
    */
   rotateSecret(id: string, options?: RequestOptions): Promise<WebhookEndpoint> {
     return this.http.request<WebhookEndpoint>({

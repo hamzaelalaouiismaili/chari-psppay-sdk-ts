@@ -1,0 +1,5180 @@
+openapi: 3.1.0
+info:
+  title: Chari Pay Public API
+  description: "REST API for external partners. Authenticate every
+    request     with your API key in the `X-CHARI-PAY-API-KEY` header; the
+    environment     (SANDBOX vs PRODUCTION) is determined by the key itself —
+    sandbox keys     start with `chari_sk_test_`, production keys with
+    `chari_sk_live_`. All money is in     MAD major units, timestamps are
+    ISO-8601 UTC, and errors use the     `{ \"error\": { \"code\", \"message\"
+    }, \"correlationId\" }` envelope.     Send an optional `Idempotency-Key` on
+    any create to make it safely     replayable, and an optional `X-Request-Id`
+    for support correlation     (echoed on every response). Register signed
+    webhook endpoints under     `/api/v1/partner/webhooks/endpoints`; use an
+    explicit event allowlist,     verify the HMAC over the raw body, and
+    deduplicate every delivery by     `Chari-Event-Id`. The `/checkout/*`
+    endpoints are the exception to API-key     auth: they are session-scoped
+    (gated by the session's single-use `vk`) —     never send your API key
+    there."
+  contact:
+    name: Chari Pay Developer Support
+    email: support@charipay.ma
+  version: 1.0.0
+servers:
+  - url: https://api-psp.charipay.ma
+    description: Sandbox — use a SANDBOX API key
+  - url: https://api-psp.charipay.ma
+    description: Production — use a PRODUCTION API key
+security:
+  - apiKey: []
+tags:
+  - name: Checkout (Direct API)
+    description: "Server-to-server checkout for a payment session, usable without
+      the hosted payment page. No API key: access is gated by the session's
+      sessionId plus the single-use vk returned by POST /v1/payment-sessions.
+      Flow: verify → submit → (3-D Secure redirect) → return → poll payment
+      status."
+  - name: Customer journey analytics
+    description: Product, link and checkout attribution timelines.
+  - name: Webhook Endpoints
+    description: API for managing webhook endpoints
+  - name: Checkout Sessions
+    description: Server-generated, single-use checkouts tied to an order, each with
+      a hosted checkout URL and an expiration.
+  - name: Payment Links
+    description: Durable, shareable links that collect a fixed amount by card or
+      cash-at-agency. Reusable, with optional expiration.
+  - name: Refunds
+    description: Refund a payment (full or partial) and track refund status.
+  - name: Transactions
+    description: List, search, export and inspect incoming and outgoing money movements.
+  - name: Wallet
+    description: Merchant wallet balance, account (RIB), and funding.
+  - name: Clients
+    description: Reusable customer records (name, e-mail, phone) that subscriptions bill.
+  - name: Products
+    description: Sellable items in the merchant's hosted storefront.
+  - name: Webhooks
+    description: >
+      Register and manage signed merchant webhook endpoints.
+
+
+      **Currently emitted events:** `payment.succeeded`, `payment.failed`,
+
+      `subscription.payment_succeeded`, `subscription.payment_failed`,
+
+      `subscription.canceled`, `refund.succeeded`, `refund.failed`,
+      `order.paid`,
+
+      `merchant_transfer.completed`, `merchant_transfer.failed`,
+      `topup.succeeded`,
+
+      `topup.failed`, `bill_payment.pending`, `bill_payment.succeeded`,
+
+      `bill_payment.failed`, `wallet.activated`, `wallet.rejected`,
+
+      `payout.completed`, and `payout.failed`.
+
+
+      Other values visible in the `WebhookEventType` enum are reserved and are
+      not
+
+      emitted by this release. Use an explicit `enabledEvents` allowlist.
+
+
+      **Receiver contract:** read the exact raw request bytes; reject stale
+
+      `Chari-Webhook-Timestamp` values; verify `Chari-Webhook-Signature` as
+      lowercase
+
+      hex HMAC-SHA256 of `timestamp + "." + rawBody`; route using
+
+      `Chari-Event-Type`; and deduplicate atomically on `Chari-Event-Id` (the
+      same
+
+      value as body `WebhookEventId`). Return `2xx` only after the business
+      update
+
+      and deduplication record commit. Any non-2xx response is retried and
+      events
+
+      can be duplicated or delivered out of order.
+
+
+      Subscription events echo `ExternalId`, `ClientId`, `PeriodDate`,
+
+      `ChargeReference`, and merchant `metadata`, allowing a partner to
+      reconcile
+
+      the exact customer and billing period without card data or provider
+      errors.
+  - name: Subscriptions
+    description: "Recurring billing with initial 3DS payment-method setup, advance
+      e-mail notices and provider-token based automatic collection. New records
+      are INCOMPLETE until the first payment succeeds and sets activatedAt. A
+      failed renewal becomes PAST_DUE: the unpaid period and charge stay open, a
+      normalized failure reason and fallback payUrl are sent to the customer and
+      merchant webhook, and no later period is opened until recovery."
+  - name: Webhooks
+    description: Register and manage signed merchant webhook endpoints.
+paths:
+  /v1/subscriptions/{reference}/payment-method:
+    put:
+      tags:
+        - Subscriptions
+      summary: Select a subscription payment method
+      description: Switches an auto-pay subscription to one of its client's saved
+        payment methods. Only the local payment-method UUID is accepted;
+        provider tokens and CVV are never exposed.
+      operationId: selectPaymentMethod
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SelectSubscriptionPaymentMethodRequest"
+        required: true
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/clients/{id}:
+    get:
+      tags:
+        - Clients
+      summary: Retrieve a client
+      description: Fetches a single client by its UUID.
+      operationId: get
+      parameters:
+        - name: id
+          in: path
+          description: Client UUID.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    put:
+      tags:
+        - Clients
+      summary: Update a client
+      description: Updates a client's name, e-mail and/or phone.
+      operationId: update
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientRequest"
+        required: true
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    delete:
+      tags:
+        - Clients
+      summary: Delete a client
+      description: Deletes a client. Returns 204 No Content. Fails if the client still
+        has active subscriptions.
+      operationId: delete
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Client deleted.
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /checkout/verify:
+    post:
+      tags:
+        - Checkout (Direct API)
+      summary: Verify a checkout session
+      description: Opens a payment session for payment using its sessionId and the
+        verify key (vk) from the create-session response. Returns the amount,
+        currency, branding and capabilities of the session. Verify MUST be
+        called before submit; on a single-use session the vk is consumed by the
+        first verify and cannot be replayed. No API key — do not send
+        X-CHARI-PAY-API-KEY.
+      operationId: verify
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutVerifyRequest"
+        required: true
+      responses:
+        "200":
+          description: Session verified and open for payment.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/CheckoutSessionView"
+        "400":
+          description: Missing sessionId or vk (VALIDATION_ERROR).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Invalid or already-consumed verify key (INVALID_TOKEN).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Unknown session (SESSION_NOT_FOUND).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "409":
+          description: Session already paid or canceled (SESSION_ALREADY_CONSUMED /
+            SESSION_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "410":
+          description: Session expired (SESSION_EXPIRED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+      security: []
+  /checkout/submit:
+    post:
+      tags:
+        - Checkout (Direct API)
+      summary: Submit card details for a checkout session
+      description: "Pays a verified session with a card, server-to-server (no hosted
+        page). Preconditions: verify must have been called first; when the
+        session was created with keepAlive=true, savePaymentMethodConsent=true
+        is required; the Idempotency-Key header is required for a reusable (non
+        single-use) session. Returns a terminal status, or PENDING_3DS with a
+        redirectionUrl the buyer must open to complete the 3-D Secure challenge
+        — afterwards call POST /checkout/return. Callers handling raw card data
+        are responsible for their own PCI DSS compliance. No API key — do not
+        send X-CHARI-PAY-API-KEY."
+      operationId: submit
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Required for a reusable session; optional (recommended) for a
+            single-use one. Replaying the same key returns the first result.
+          required: false
+          schema:
+            type: string
+          example: sub_9f3c2a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutSubmitRequest"
+        required: true
+      responses:
+        "200":
+          description: "Submission accepted: terminal status, or PENDING_3DS with the ACS
+            redirectionUrl."
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/CheckoutSubmitResponse"
+        "400":
+          description: Failed validation, or a missing/oversized Idempotency-Key on a
+            reusable session (VALIDATION_ERROR / INVALID_IDEMPOTENCY_KEY).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Session was not verified first (INVALID_TOKEN).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Unknown session (SESSION_NOT_FOUND).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "409":
+          description: Session already paid or canceled, or the Idempotency-Key was
+            replayed with a different body (SESSION_ALREADY_CONSUMED /
+            SESSION_NOT_ACTIVE / IDEMPOTENCY_CONFLICT).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "410":
+          description: Session expired (SESSION_EXPIRED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: keepAlive session submitted without savePaymentMethodConsent=true
+            (PAYMENT_METHOD_CONSENT_REQUIRED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+      security: []
+  /checkout/return:
+    post:
+      tags:
+        - Checkout (Direct API)
+      summary: Confirm the 3-D Secure return
+      description: Correlates the buyer's return from the 3-D Secure challenge with
+        the submitted operation and returns the final status plus the merchant
+        accept/decline redirectUrl. Call it after the buyer completes the
+        redirectionUrl from submit. No API key.
+      operationId: confirmReturn
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutReturnRequest"
+        required: true
+      responses:
+        "200":
+          description: Operation status resolved.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/CheckoutReturnResponse"
+        "400":
+          description: Missing sessionId or operationId (VALIDATION_ERROR).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Unknown session, or the operation does not belong to it
+            (SESSION_NOT_FOUND / OPERATION_NOT_FOUND).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+      security: []
+  /v1/wallet/cash-ins:
+    post:
+      tags:
+        - Wallet
+      summary: Fund the merchant wallet
+      description: Creates a local hosted card-payment link. Card submission funds the
+        shared sandbox eSIM or the merchant's real production eSIM through the
+        canonical checkout flow. Ledger-only sandbox creates and finalizes a
+        canonical cash-in through the durable outbox.
+      operationId: cashin
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Required retry-safe idempotency key.
+          required: true
+          schema:
+            type: string
+          example: cashin_20260731_001
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletCashinRequest"
+        required: true
+      responses:
+        "201":
+          description: Wallet cash-in link or ledger funding created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletCashinResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions/{reference}/test-auto-pay:
+    post:
+      tags:
+        - Subscriptions
+      summary: Force the next automatic payment (sandbox only)
+      description: "Test helper available only with a SANDBOX API key. It creates or
+        reuses the charge for the currently outstanding period, queues the
+        pre-debit e-mail, and immediately executes the saved-token payment with
+        its internally decrypted CVV and 3DS disabled. The CVV never appears in
+        the request or response. The subscription must be INCOMPLETE, ACTIVE or
+        retryable PAST_DUE, autoPay must be enabled, and the first keepAlive +
+        3DS checkout must already have attached a saved payment method. On
+        success, nextRunDate advances. On failure, it does not advance: an
+        initial failure stays INCOMPLETE; a renewal failure becomes PAST_DUE.
+        The response contains a safe failure category/code, attempt count,
+        retry/cancellation timing and fallbackPayUrl. Hard declines such as an
+        expired card require a replacement payment method or manual payment.
+        Idempotency-Key is mandatory; replaying it returns the same operation
+        without another debit."
+      operationId: testAutoPay
+      parameters:
+        - name: reference
+          in: path
+          description: Subscription reference.
+          required: true
+          schema:
+            type: string
+          example: SUB-A12BC34DE5
+        - name: Idempotency-Key
+          in: header
+          description: Required unique key. Reuse it only to replay this exact test request.
+          required: true
+          schema:
+            type: string
+          example: test-cycle-2026-09-01
+      responses:
+        "200":
+          description: Forced sandbox billing period executed.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/SubscriptionAutoPayTestResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: A production key attempted to use the test endpoint.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "409":
+          description: The subscription is not ready for auto-pay testing or the
+            idempotency key conflicts.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/SubscriptionAutoPayTestResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions/{reference}/resume:
+    post:
+      tags:
+        - Subscriptions
+      summary: Resume a subscription
+      description: Resumes a paused subscription's billing cycle.
+      operationId: resume
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions/{reference}/pause:
+    post:
+      tags:
+        - Subscriptions
+      summary: Pause a subscription
+      description: Suspends future charges without cancelling. Resume later with /resume.
+      operationId: pause
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions/{reference}/cancel:
+    post:
+      tags:
+        - Subscriptions
+      summary: Cancel a subscription
+      description: Permanently ends the subscription. No further charges are generated.
+      operationId: cancel
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions:
+    get:
+      tags:
+        - Subscriptions
+      summary: List subscriptions
+      description: Returns the caller's subscriptions for the key's environment, as a
+        paginated Page.
+      operationId: list
+      parameters:
+        - name: origin
+          in: query
+          description: Filter by creation origin (API or DASHBOARD).
+          required: false
+          schema:
+            type: string
+            enum:
+              - API
+              - DASHBOARD
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    post:
+      tags:
+        - Subscriptions
+      summary: Create a subscription
+      description: "Starts a recurring subscription for an existing client. Auto-pay
+        defaults to true; the returned status is INCOMPLETE until the first
+        billing period succeeds. The first hosted checkout uses 3DS, saves a
+        provider token, masks the PAN and stores reusable authentication
+        material in the restricted audited vault. Neither token nor CVV is
+        returned. Future charges are announced by e-mail and collected at
+        billingTime in Africa/Casablanca. If the start date is today or earlier,
+        the first charge is opened immediately and returned in currentCharge.
+        Supply an optional client-owned externalId (unique per merchant) to make
+        the create idempotent: a duplicate externalId returns the existing
+        subscription with 200 OK."
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionRequest"
+        required: true
+      responses:
+        "200":
+          description: Existing subscription returned (idempotent replay on externalId).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "201":
+          description: Subscription created.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/refunds:
+    get:
+      tags:
+        - Refunds
+      summary: List refunds
+      description: Returns your refunds for the key's environment, most recent first,
+        as a paginated Page. Optionally filtered by status (PENDING, SUCCESS,
+        FAILED).
+      operationId: list_1
+      parameters:
+        - name: status
+          in: query
+          description: Only refunds in this status.
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - SUCCESS
+              - FAILED
+          example: FAILED
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    post:
+      tags:
+        - Refunds
+      summary: Create a refund
+      description: "Refunds a payment, in full or partially (refundAmount). Identify
+        the payment by operationId or externalId. Idempotent on refundReference:
+        replaying an already-executed reference returns the existing refund
+        (200) without re-debiting; a fresh one returns 202 Accepted while it
+        settles."
+      operationId: create_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefundPaymentRequest"
+        required: true
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/products:
+    get:
+      tags:
+        - Products
+      summary: List products
+      description: Returns the caller's products for the key's environment as a
+        paginated Page.
+      operationId: list_2
+      parameters:
+        - name: origin
+          in: query
+          description: Filter by creation origin (API or DASHBOARD).
+          required: false
+          schema:
+            type: string
+            enum:
+              - API
+              - DASHBOARD
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    post:
+      tags:
+        - Products
+      summary: Create a product
+      description: "Creates a product in the caller's catalog. Supply an optional
+        client-owned externalId (unique per merchant) to make the create
+        idempotent: a duplicate externalId returns the existing product with 200
+        OK."
+      operationId: create_2
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductRequest"
+        required: true
+      responses:
+        "200":
+          description: Existing product returned (idempotent replay on externalId).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ProductResponse"
+        "201":
+          description: Product created.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ProductResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-sessions/{sessionId}/cancel:
+    post:
+      tags:
+        - Checkout Sessions
+      summary: Cancel a checkout session
+      description: Expires the session so it can no longer be paid. Returns the
+        updated session status.
+      operationId: cancel_1
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-sessions:
+    get:
+      tags:
+        - Checkout Sessions
+      summary: List checkout sessions
+      description: Returns the caller's checkout sessions for the key's environment,
+        most recent first. Optionally filter by creation origin with ?origin=API
+        or ?origin=DASHBOARD.
+      operationId: list_3
+      parameters:
+        - name: origin
+          in: query
+          description: Filter by creation origin (API or DASHBOARD).
+          required: false
+          schema:
+            type: string
+            enum:
+              - API
+              - DASHBOARD
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    post:
+      tags:
+        - Checkout Sessions
+      summary: Create a checkout session
+      description: "Creates a single-use checkout session for an order and returns its
+        hosted checkoutUrl. Supply an optional client-owned externalId (unique
+        per merchant) to make the create idempotent: a duplicate externalId
+        returns the existing session with 200 OK. Pass an optional
+        Idempotency-Key header to make retries safe."
+      operationId: create_3
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Optional idempotency key; replaying the same value returns the
+            first result.
+          required: false
+          schema:
+            type: string
+          example: idem_9f3c2a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckoutSessionRequest"
+        required: true
+      responses:
+        "200":
+          description: Existing session returned (idempotent replay on externalId).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/StorePaymentDataResponse"
+        "201":
+          description: Session created.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/StorePaymentDataResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-links/{reference}/send:
+    post:
+      tags:
+        - Payment Links
+      summary: E-mail a payment link
+      description: Sends the payment link by e-mail to the given address, or the
+        link's stored customer e-mail if no body is provided. Returns 202
+        Accepted.
+      operationId: send
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendPaymentLinkRequest"
+      responses:
+        "202":
+          description: Send accepted.
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-links/{reference}/cancel:
+    post:
+      tags:
+        - Payment Links
+      summary: Cancel a payment link
+      description: Deactivates the link so it can no longer be paid. Idempotent;
+        returns the updated link.
+      operationId: cancel_2
+      parameters:
+        - name: reference
+          in: path
+          description: Payment-link reference.
+          required: true
+          schema:
+            type: string
+          example: pl_3ND8xk
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-links:
+    get:
+      tags:
+        - Payment Links
+      summary: List payment links
+      description: Returns the caller's payment links for the key's environment, most
+        recent first, as a paginated Page.
+      operationId: list_4
+      parameters:
+        - name: origin
+          in: query
+          description: Filter by creation origin (API or DASHBOARD).
+          required: false
+          schema:
+            type: string
+            enum:
+              - API
+              - DASHBOARD
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    post:
+      tags:
+        - Payment Links
+      summary: Create a payment link
+      description: "Creates a reusable (or single-use) payment link. Supply an
+        optional client-owned externalId (unique per merchant) to make the
+        create idempotent: a duplicate externalId returns the existing link with
+        200 OK instead of creating a new one. Returns the link including its
+        buyer-facing payUrl."
+      operationId: create_4
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Optional idempotency key; replaying the same value returns the
+            first result.
+          required: false
+          schema:
+            type: string
+          example: idem_9f3c2a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentLinkRequest"
+        required: true
+      responses:
+        "200":
+          description: Existing link returned (idempotent replay on externalId).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/PaymentLinkResponse"
+        "201":
+          description: Link created.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/PaymentLinkResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /api/v1/partner/webhooks/endpoints:
+    get:
+      tags:
+        - Webhooks
+      summary: List partner webhook endpoints
+      operationId: list_5
+      parameters:
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/PageWebhookEndpointResponse"
+    post:
+      tags:
+        - Webhooks
+      summary: Register a partner webhook endpoint
+      description: Returns the signing secret once; it is not exposed by later reads.
+        Store it in a secret manager. The endpoint belongs only to the API key's
+        SANDBOX or PRODUCTION environment. Subscribe to
+        subscription.payment_succeeded to mark a merchant billing period paid,
+        subscription.payment_failed for normalized recovery information, and
+        subscription.canceled for terminal dunning. Events include ExternalId,
+        PeriodDate and merchant metadata for reconciliation.
+      operationId: create_5
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEndpointRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointResponse"
+  /api/v1/partner/webhooks/endpoints/{id}/test:
+    post:
+      tags:
+        - Webhooks
+      summary: Send a test event to a partner webhook endpoint
+      description: "Queues a synthetic payment.succeeded carrying Test: true, signed
+        exactly like a real event, ignoring the event allowlist. Returns the
+        delivery id; read it back on GET
+        /api/v1/partner/webhooks/events/{deliveryId} to see your receiver's
+        response."
+      operationId: sendTestEvent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+  /api/v1/partner/webhooks/endpoints/{id}/rotate-secret:
+    post:
+      tags:
+        - Webhooks
+      summary: Rotate a partner webhook signing secret
+      description: Immediately invalidates the previous secret and returns the
+        replacement once. Update the receiver atomically to avoid rejecting
+        deliveries.
+      operationId: rotate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointResponse"
+  /api/v1/partner/webhooks/endpoints/{id}/activate:
+    post:
+      tags:
+        - Webhooks
+      summary: Reactivate a suspended partner webhook endpoint
+      description: Endpoints are auto-suspended after repeated delivery failures;
+        queued events are retained and resume in order on reactivation.
+      operationId: activate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointResponse"
+  /v1/clients/{id}/payment-methods/{paymentMethodId}/default:
+    post:
+      tags:
+        - Clients
+      summary: Set a client's default payment method
+      description: Marks one client-owned payment method as the default for new
+        auto-pay subscriptions.
+      operationId: defaultPaymentMethod
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: paymentMethodId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/clients:
+    get:
+      tags:
+        - Clients
+      summary: List clients
+      description: Returns the account's saved clients as a paginated Page.
+      operationId: list_6
+      parameters:
+        - name: origin
+          in: query
+          description: Filter by creation origin (API or DASHBOARD).
+          required: false
+          schema:
+            type: string
+            enum:
+              - API
+              - DASHBOARD
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    post:
+      tags:
+        - Clients
+      summary: Create a client
+      description: Creates a reusable customer record for this account.
+      operationId: create_6
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientRequest"
+        required: true
+      responses:
+        "201":
+          description: Client created.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ClientResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/products/{reference}:
+    get:
+      tags:
+        - Products
+      summary: Retrieve a product
+      description: Fetches a single product by its reference.
+      operationId: get_1
+      parameters:
+        - name: reference
+          in: path
+          description: Product reference.
+          required: true
+          schema:
+            type: string
+          example: prod_2Bc9Zt
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    delete:
+      tags:
+        - Products
+      summary: Deactivate a product
+      description: Deactivates the product so it can no longer be ordered. Returns the
+        updated product.
+      operationId: deactivate
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+    patch:
+      tags:
+        - Products
+      summary: Update a product
+      description: Partially updates a product; only the fields present in the body
+        are changed.
+      operationId: update_1
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductRequest"
+        required: true
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /api/v1/partner/webhooks/endpoints/{id}:
+    get:
+      tags:
+        - Webhooks
+      summary: Retrieve a partner webhook endpoint
+      operationId: get_2
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointResponse"
+    delete:
+      tags:
+        - Webhooks
+      summary: Delete a partner webhook endpoint
+      operationId: delete_1
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+    patch:
+      tags:
+        - Webhooks
+      summary: Update a partner webhook endpoint
+      description: Updates the URL, explicit event allowlist, custom routing headers,
+        or enabled state. Use an explicit enabledEvents list to avoid
+        automatically receiving newly introduced events.
+      operationId: update_2
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEndpointRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointResponse"
+  /checkout/payments/{reference}:
+    get:
+      tags:
+        - Checkout (Direct API)
+      summary: Get buyer-facing payment status
+      description: Resolves the status of a payment by order reference, payment-link
+        reference, or the provider gateway id from the 3-D Secure return. Always
+        answers with our reference and carries no PII. Use it to poll for the
+        outcome after submit/return. No API key.
+      operationId: paymentStatus
+      parameters:
+        - name: reference
+          in: path
+          description: Order reference, payment-link reference, or provider gateway id.
+          required: true
+          schema:
+            type: string
+          example: ord_7Hq2Lm
+      responses:
+        "200":
+          description: Status resolved.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/PublicPaymentStatusResponse"
+        "404":
+          description: No payment matches the reference (ORDER_NOT_FOUND).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+      security: []
+  /v1/wallet/account/rib-document:
+    get:
+      tags:
+        - Wallet
+      summary: Download wallet RIB (PDF)
+      description: Returns the wallet's bank details rendered as a downloadable PDF
+        document.
+      operationId: rib
+      responses:
+        "200":
+          description: PDF document.
+          content:
+            application/pdf: {}
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/wallet/account:
+    get:
+      tags:
+        - Wallet
+      summary: Retrieve wallet account (RIB)
+      description: Returns the copyable bank details (RIB/IBAN/BIC, holder, bank) and
+        current balances.
+      operationId: account
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/wallet:
+    get:
+      tags:
+        - Wallet
+      summary: Retrieve wallet balance
+      description: Returns the live wallet balance in MAD for the key's environment.
+      operationId: balance
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/transactions/{operationId}/timeline:
+    get:
+      tags:
+        - Transactions
+      summary: Transaction timeline
+      description: Returns the synthesized lifecycle timeline (created, authorized,
+        captured, refunded, ...) for a transaction.
+      operationId: timeline
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/transactions/{operationId}:
+    get:
+      tags:
+        - Transactions
+      summary: Retrieve a transaction
+      description: Fetches a single transaction by its operationId.
+      operationId: get_3
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/transactions/export.csv:
+    get:
+      tags:
+        - Transactions
+      summary: Export transactions (CSV)
+      description: Streams the filtered transactions as a CSV file (up to 10,000
+        rows). Requires transaction:export.
+      operationId: exportCsv
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - PENDING_3DS
+              - SUCCESS
+              - FAILED
+              - CANCELED
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - PAYMENT
+              - REFUND
+              - BILL_PAYMENT
+              - BANK_TRANSFER
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/transactions:
+    get:
+      tags:
+        - Transactions
+      summary: List transactions
+      description: Lists incoming and outgoing transactions for the key's environment
+        with filters (status, type, method, channel, date range, search). Offset
+        pagination by default; pass limit (+cursor) for keyset cursor pagination
+        on deep scans.
+      operationId: list_7
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - PENDING_3DS
+              - SUCCESS
+              - FAILED
+              - CANCELED
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - PAYMENT
+              - REFUND
+              - BILL_PAYMENT
+              - BANK_TRANSFER
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: settlementId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions/{reference}/charges:
+    get:
+      tags:
+        - Subscriptions
+      summary: List a subscription's charges
+      description: Returns every charge (payment link) generated by the subscription,
+        most recent period first.
+      operationId: charges
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/subscriptions/{reference}:
+    get:
+      tags:
+        - Subscriptions
+      summary: Retrieve a subscription
+      description: Fetches a subscription, its safe saved-method display data, open
+        charge and billing recovery state. For a failed INCOMPLETE setup or
+        PAST_DUE renewal, billingRecovery contains a normalized reason, customer
+        action, attempt count, next retry and cancellation deadline; provider
+        error JSON and sensitive card data are never returned.
+      operationId: get_4
+      parameters:
+        - name: reference
+          in: path
+          description: Subscription reference.
+          required: true
+          schema:
+            type: string
+          example: sub_7Qa1bx
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/refunds/{reference}:
+    get:
+      tags:
+        - Refunds
+      summary: Retrieve a refund
+      description: Fetches a refund by your refundReference or the platform refundId.
+      operationId: get_5
+      parameters:
+        - name: reference
+          in: path
+          description: Your refundReference or the platform refundId.
+          required: true
+          schema:
+            type: string
+          example: rf_2026_0001
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/products/{reference}/orders:
+    get:
+      tags:
+        - Products
+      summary: List a product's orders
+      description: Returns the orders placed for this product as a paginated Page.
+      operationId: orders
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-sessions/{sessionId}:
+    get:
+      tags:
+        - Checkout Sessions
+      summary: Retrieve a checkout session
+      description: Fetches a session's current status, amount and expiration by its id.
+      operationId: get_6
+      parameters:
+        - name: sessionId
+          in: path
+          description: Session id.
+          required: true
+          schema:
+            type: string
+          example: ps_5Kd0Rn
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-links/{reference}/qr:
+    get:
+      tags:
+        - Payment Links
+      summary: Payment-link QR code
+      description: Returns a PNG QR code that encodes the link's buyer-facing payUrl.
+      operationId: qr
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PNG image.
+          content:
+            image/png: {}
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            image/png:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            image/png:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            image/png:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            image/png:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            image/png:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-links/{reference}/poster:
+    get:
+      tags:
+        - Payment Links
+      summary: Payment-link poster (PDF)
+      description: Returns a printable A4 poster (PDF) with the QR code and amount,
+        for display at a till.
+      operationId: poster
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PDF document.
+          content:
+            application/pdf: {}
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            application/pdf:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/payment-links/{reference}:
+    get:
+      tags:
+        - Payment Links
+      summary: Retrieve a payment link
+      description: Fetches a single payment link by its reference.
+      operationId: get_7
+      parameters:
+        - name: reference
+          in: path
+          description: Payment-link reference.
+          required: true
+          schema:
+            type: string
+          example: pl_3ND8xk
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: No such link for this account.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /api/v1/partner/webhooks/events:
+    get:
+      tags:
+        - Webhooks
+      summary: List emitted webhook events
+      description: Returns the events emitted for this API key's environment, newest
+        first. Filter by endpoint, event type, delivery status or creation
+        window. Event types use their dotted value such as payment.succeeded;
+        the full catalog is available from GET
+        /api/v1/partner/webhooks/event-types. Payloads are omitted here — read a
+        single event to get the exact signed body.
+      operationId: list_8
+      parameters:
+        - name: endpointId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: eventType
+          in: query
+          required: false
+          schema:
+            type: string
+            description: Webhook event name used in enabledEvents and the Chari-Event-Type
+              delivery header. The public-v1 guide identifies which names are
+              currently emitted and which are reserved for future products.
+            enum:
+              - payment_link.created
+              - payment_link.updated
+              - payment_link.expired
+              - payment_link.cancelled
+              - payment.initiated
+              - payment.requires_action
+              - payment.succeeded
+              - payment.failed
+              - subscription.payment_succeeded
+              - subscription.payment_failed
+              - subscription.canceled
+              - refund.initiated
+              - refund.succeeded
+              - refund.failed
+              - security.token_reused
+              - security.rate_limit_exceeded
+              - security.invalid_signature
+              - wallet.activated
+              - wallet.rejected
+              - payout.completed
+              - payout.failed
+              - submerchant.near_cap
+              - wallet.funded
+              - wallet.transfer_completed
+              - merchant_transfer.completed
+              - merchant_transfer.failed
+              - topup.pending
+              - topup.succeeded
+              - topup.failed
+              - topup.reversed
+              - bill_payment.pending
+              - bill_payment.succeeded
+              - bill_payment.failed
+              - bill_payment.reversed
+              - voucher.issued
+              - voucher.failed
+              - voucher.redeemed
+              - voucher.expired
+              - savings.deposit_succeeded
+              - savings.withdrawal_succeeded
+              - savings.instruction_failed
+              - savings.goal_reached
+              - order.paid
+              - cash_collection.deposit.completed
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - pending
+              - sending
+              - delivered
+              - failed
+              - retrying
+              - exhausted
+              - skipped
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/PageWebhookEventResponse"
+  /api/v1/partner/webhooks/events/{deliveryId}:
+    get:
+      tags:
+        - Webhooks
+      summary: Retrieve one emitted webhook event
+      description: Includes the exact signed payload that was sent to the receiver,
+        which lets a partner reproduce the signature locally before replaying.
+      operationId: get_8
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/WebhookEventResponse"
+  /api/v1/partner/webhooks/event-types:
+    get:
+      tags:
+        - Webhook Endpoints
+      summary: List every subscribable webhook event type
+      description: Returns the canonical dotted event names accepted by enabledEvents
+        and sent back in the Chari-Event-Type delivery header. Pass
+        emittedOnly=true to keep only the events this release actually
+        publishes.
+      operationId: list_9
+      parameters:
+        - name: emittedOnly
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: OK
+          content:
+            "*/*":
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookEventTypeResponse"
+  /v1/clients/{id}/payment-methods:
+    get:
+      tags:
+        - Clients
+      summary: List a client's saved payment methods
+      description: Returns safe local payment-method identifiers and masked card
+        metadata. Provider card tokens, CVV plaintext and CVV ciphertext are
+        never returned.
+      operationId: paymentMethods
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Saved payment methods, newest first.
+          content:
+            "*/*":
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClientPaymentMethodResponse"
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/analytics/journeys/{resourceType}/{resourceId}/summary:
+    get:
+      tags:
+        - Customer journey analytics
+      summary: Summarize a resource's funnel and acquisition sources
+      operationId: summary
+      parameters:
+        - name: resourceType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - PRODUCT
+              - PAYMENT_LINK
+              - PAYMENT_SESSION
+              - ORDER
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/analytics/journeys/{resourceType}/{resourceId}/events:
+    get:
+      tags:
+        - Customer journey analytics
+      summary: List a resource's customer-journey events
+      description: Returns the tenant-scoped timeline, including retained
+        IP/geolocation and attribution.
+      operationId: events
+      parameters:
+        - name: resourceType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - PRODUCT
+              - PAYMENT_LINK
+              - PAYMENT_SESSION
+              - ORDER
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: pageable
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Pageable"
+      responses:
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /v1/clients/{id}/payment-methods/{paymentMethodId}:
+    delete:
+      tags:
+        - Clients
+      summary: Delete a client's payment method
+      description: Deletes the provider token and soft-deletes its local mirror.
+        Subscriptions using it fall back to customer-present checkout on their
+        next attempt.
+      operationId: deletePaymentMethod
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: paymentMethodId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Payment method deleted.
+        "400":
+          description: Malformed request or failed validation (code = VALIDATION_ERROR /
+            MISSING_PARAMETER).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Missing or invalid API key (code = UNAUTHORIZED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Authenticated but the key lacks the required permission, or
+            production access is not enabled (code = FORBIDDEN /
+            PRODUCTION_ACCESS_DENIED).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Syntactically valid but a business rule blocks it (e.g.
+            WALLET_NOT_ACTIVE).
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "429":
+          description: Rate limit exceeded (code = RATE_LIMITED). Retry after the
+            Retry-After header.
+          content:
+            "*/*":
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+components:
+  schemas:
+    SelectSubscriptionPaymentMethodRequest:
+      type: object
+      properties:
+        paymentMethodId:
+          type: string
+          format: uuid
+          description: Client-owned local payment-method UUID.
+      required:
+        - paymentMethodId
+    ApiErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code clients branch on.
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          description: Human-readable explanation. Never contains stack traces or SQL.
+          example: amount must be greater than 0
+      required:
+        - code
+        - message
+    ApiErrorResponse:
+      type: object
+      description: Canonical /v1 error envelope. Every error — validation,
+        authentication, authorization, business-rule — uses this shape.
+      properties:
+        error:
+          $ref: "#/components/schemas/ApiErrorBody"
+          description: The error detail.
+        correlationId:
+          type: string
+          description: Echo of the request X-Request-Id, for support/log correlation.
+          example: b0c1e2d3-4f56-7890-abcd-ef0123456789
+      required:
+        - error
+    UpdateClientRequest:
+      type: object
+      description: Partial-update body for a client. Only the fields present are changed.
+      properties:
+        name:
+          type: string
+          description: Client full name. Optional; only applied when present.
+          example: Amine Bennani
+          maxLength: 255
+          minLength: 0
+        email:
+          type: string
+          description: Client email address. Optional; only applied when present.
+          example: amine@example.com
+          maxLength: 255
+          minLength: 0
+        phone:
+          type: string
+          description: Client phone number. Optional; only applied when present.
+          example: "+212600000000"
+          maxLength: 30
+          minLength: 0
+    CheckoutVerifyRequest:
+      type: object
+      description: Opens a payment session with its id and verify key.
+      properties:
+        sessionId:
+          type: string
+          description: Session id from the create-session response.
+          example: ps_5Kd0Rn
+        vk:
+          type: string
+          description: Verify key (verifyKey) from the create-session response; single-use
+            on single-use sessions.
+      required:
+        - sessionId
+        - vk
+    Branding:
+      type: object
+      properties:
+        displayName:
+          type: string
+        logoUrl:
+          type: string
+        primaryColor:
+          type: string
+        accentColor:
+          type: string
+        theme:
+          type: string
+        locale:
+          type: string
+        contactPhone:
+          type: string
+        receiptFooter:
+          type: string
+    CheckoutSessionView:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        status:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        orderId:
+          type: string
+        keepAlive:
+          type: boolean
+        frontendTheme:
+          type: string
+        frontendLogo:
+          type: string
+        frontendCompanyName:
+          type: string
+        branding:
+          $ref: "#/components/schemas/Branding"
+        expiresAt:
+          type: string
+          format: date-time
+        testMode:
+          type: boolean
+        defaultPaymentMethod:
+          type: string
+        cashAvailable:
+          type: boolean
+    Card:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        pan:
+          type: string
+          description: Full card number (PAN). Never stored unmasked.
+        expiryDate:
+          type: string
+          description: Card expiry, MM/YY.
+          example: 09/27
+          pattern: ^(0[1-9]|1[0-2])/[0-9]{2}$
+        cvv:
+          type: string
+        cardName:
+          type: string
+          description: Name as printed on the card.
+      required:
+        - cvv
+        - expiryDate
+        - firstName
+        - lastName
+        - pan
+    CheckoutSubmitRequest:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          description: Session id of an already-verified session.
+          example: ps_5Kd0Rn
+        card:
+          $ref: "#/components/schemas/Card"
+        savePaymentMethodConsent:
+          type: boolean
+          description: Explicit buyer consent to store the payment method; required (true)
+            when the session has keepAlive=true, ignored otherwise.
+      required:
+        - card
+        - sessionId
+    CheckoutSubmitResponse:
+      type: object
+      properties:
+        operationId:
+          type: integer
+          format: int64
+          description: Payment operation id; echo it to POST /checkout/return after 3-D
+            Secure.
+        reference:
+          type: string
+        status:
+          type: string
+          description: Operation status, e.g. SUCCESS, FAILED or PENDING_3DS.
+          example: PENDING_3DS
+        redirectionUrl:
+          type: string
+          description: 3-D Secure challenge URL the buyer must open when status is
+            PENDING_3DS; absent on a terminal status.
+    CheckoutReturnRequest:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        operationId:
+          type: integer
+          format: int64
+      required:
+        - operationId
+        - sessionId
+    CheckoutReturnResponse:
+      type: object
+      properties:
+        operationId:
+          type: integer
+          format: int64
+        status:
+          type: string
+        redirectUrl:
+          type: string
+    WalletCashinRequest:
+      type: object
+      description: Amount to fund into the merchant wallet.
+      properties:
+        amount:
+          type: number
+          description: Amount to fund in MAD.
+          example: 250
+          minimum: 0.01
+      required:
+        - amount
+    WalletCashinResponse:
+      type: object
+      description: Wallet cash-in link or completed ledger funding result.
+      properties:
+        operationId:
+          type: integer
+          format: int64
+          description: Transaction operation id. Omitted until a hosted-link payer submits
+            a card.
+          example: 1042
+        status:
+          type: string
+          description: Cash-in status.
+          example: SUCCESS
+        environment:
+          type: string
+          description: Environment funded by the request.
+          example: SANDBOX
+        requestedAmount:
+          type: number
+          description: Requested amount.
+          example: 250
+        fundedAmount:
+          type: number
+          description: Amount already funded. Zero while a funding link is pending.
+          example: 250
+        balance:
+          type: number
+          description: Current merchant-isolated sandbox balance. Omitted in production.
+          example: 250
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          example: MAD
+        paymentUrl:
+          type: string
+          description: Card-funding URL. Omitted only for an immediate ledger-mode sandbox
+            cash-in.
+        reference:
+          type: string
+          description: Local payment-link or sandbox ledger reference.
+          example: PL-4A6F01D233
+        createdAt:
+          type: string
+          format: date-time
+          description: Transaction creation time.
+    SubscriptionAutoPayTestResponse:
+      type: object
+      description: Sandbox-only result of forcing the next subscription period through
+        automatic collection.
+      properties:
+        subscriptionReference:
+          type: string
+          description: Subscription that was tested.
+          example: SUB-A12BC34DE5
+        periodDate:
+          type: string
+          format: date
+          description: Scheduled period consumed early by this test run.
+          example: 2026-09-01
+        chargeReference:
+          type: string
+          description: Payment-link charge created for the forced period.
+          example: PL-8C4F2A1B90
+        operationId:
+          type: integer
+          format: int64
+          description: Resulting payment operation identifier.
+          example: 6671
+        paymentStatus:
+          type: string
+          description: "Automatic payment status: PENDING, SUCCESS, FAILED, or PENDING_3DS."
+          example: SUCCESS
+        chargeStatus:
+          type: string
+          description: Current charge status after the attempt.
+          example: PAID
+        subscriptionStatus:
+          type: string
+          description: Subscription status after the attempt.
+          example: PAST_DUE
+        fallbackPayUrl:
+          type: string
+          description: Secure customer-action URL when the automatic attempt did not
+            succeed.
+          example: https://pay.chari.ma/pay/PL-8C4F2A1B90
+        nextRunDate:
+          type: string
+          format: date
+          description: Outstanding period after failure, or next period after success.
+          example: 2026-09-01
+        failureCategory:
+          type: string
+          description: Stable normalized failure category; absent after success.
+          example: CARD_EXPIRED
+        failureCode:
+          type: string
+          description: Stable machine-readable failure code; absent after success.
+          example: CARD_EXPIRED
+        failureMessage:
+          type: string
+          description: Safe developer-facing explanation; absent after success.
+        retryable:
+          type: boolean
+          description: Whether another automatic attempt is allowed for this failure.
+        attemptCount:
+          type: integer
+          format: int32
+          description: Consecutive failed attempts for the outstanding period.
+          example: 1
+        maxAttempts:
+          type: integer
+          format: int32
+          description: Configured total-attempt limit, including the first attempt.
+          example: 4
+        nextPaymentAttemptAt:
+          type: string
+          format: date-time
+          description: Scheduled retry time; absent for hard failures requiring customer
+            action.
+        autoCancelAt:
+          type: string
+          format: date-time
+          description: Automatic cancellation deadline while the period remains unpaid.
+        preDebitNoticeQueued:
+          type: boolean
+          description: True when the pre-debit email was accepted before the payment
+            attempt.
+          example: true
+    CreateSubscriptionRequest:
+      type: object
+      description: Payload to start a recurring subscription for a client.
+      properties:
+        clientId:
+          type: string
+          format: uuid
+          description: UUID of the client to bill (create it first via /v1/clients).
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        amount:
+          type: number
+          description: Amount to charge each period, in MAD major units.
+          example: 99
+        description:
+          type: string
+          description: Description shown on each generated charge.
+          example: Gold plan — monthly
+          maxLength: 255
+          minLength: 0
+        frequency:
+          type: string
+          description: Billing cadence.
+          enum:
+            - DAILY
+            - WEEKLY
+            - MONTHLY
+            - YEARLY
+          example: MONTHLY
+        startDate:
+          type: string
+          format: date
+          description: Date of the first billing period (YYYY-MM-DD).
+          example: 2026-08-01
+        endDate:
+          type: string
+          format: date
+          description: Optional end date; open-ended when omitted.
+          example: 2027-08-01
+        channels:
+          type: array
+          description: Channels used to notify the client of each charge.
+          example:
+            - EMAIL
+          items:
+            type: string
+            enum:
+              - EMAIL
+              - PUSH
+              - SMS
+              - WHATSAPP
+              - IN_APP
+          uniqueItems: true
+        externalId:
+          type: string
+          description: Your subscription identifier, unique per merchant and environment.
+            Creating a subscription with an externalId that already exists
+            returns the existing subscription. It is echoed as ExternalId in
+            every subscription payment webhook for reconciliation.
+          example: merchant-sub-8421
+          maxLength: 255
+          minLength: 0
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Optional merchant-owned reconciliation attributes (maximum 4 KB
+            serialized), echoed unchanged as metadata in every subscription
+            payment webhook. Use opaque identifiers such as customerId or
+            contractId; do not include card data, CVV, credentials, or
+            unnecessary personal data.
+          example:
+            customerId: cus_1001
+            plan: gold
+        autoPay:
+          type: boolean
+          description: Save the payment method after the first 3DS payment and
+            automatically collect future periods. Defaults to true.
+          example: true
+        billingTime:
+          $ref: "#/components/schemas/LocalTime"
+          description: Recurring charge time in Africa/Casablanca.
+          example: 09:00
+        reminderDaysBefore:
+          type: integer
+          format: int32
+          description: How many days before an automatic debit to e-mail the client (0-30).
+          example: 3
+          maximum: 30
+          minimum: 0
+        paymentMethodId:
+          type: string
+          format: uuid
+          description: Optional client-owned payment-method UUID. When omitted, the
+            client's default payment method is reused when one exists; otherwise
+            the first checkout captures a new method.
+      required:
+        - amount
+        - channels
+        - clientId
+        - description
+        - frequency
+        - startDate
+    LocalTime:
+      type: object
+      properties:
+        hour:
+          type: integer
+          format: int32
+        minute:
+          type: integer
+          format: int32
+        second:
+          type: integer
+          format: int32
+        nano:
+          type: integer
+          format: int32
+    BillingRecovery:
+      type: object
+      properties:
+        category:
+          type: string
+          enum:
+            - CARD_EXPIRED
+            - INSUFFICIENT_FUNDS
+            - CARD_DECLINED
+            - AUTHENTICATION_REQUIRED
+            - PAYMENT_METHOD_UNAVAILABLE
+            - PROVIDER_TEMPORARILY_UNAVAILABLE
+            - UNKNOWN
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+        customerAction:
+          type: string
+        attemptCount:
+          type: integer
+          format: int32
+        pastDueSince:
+          type: string
+          format: date-time
+        failedAt:
+          type: string
+          format: date-time
+        nextPaymentAttemptAt:
+          type: string
+          format: date-time
+        autoCancelAt:
+          type: string
+          format: date-time
+    PaymentLinkResponse:
+      type: object
+      description: Merchant-facing view of a payment link.
+      properties:
+        reference:
+          type: string
+          description: Unique payment-link reference.
+          example: pl_3ND8xk
+        externalId:
+          type: string
+          description: Merchant-supplied external identifier.
+          example: order-1234
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Free-form merchant metadata.
+          example:
+            cartId: c_987
+        origin:
+          type: string
+          description: How the record was created (API or DASHBOARD).
+          enum:
+            - API
+            - DASHBOARD
+          example: API
+        status:
+          type: string
+          description: Current lifecycle status of the payment link.
+          example: ACTIVE
+        amount:
+          type: number
+          description: Amount to collect.
+          example: 149.9
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          example: MAD
+        description:
+          type: string
+          description: Human-readable description shown to the payer.
+          example: "Order #1234"
+        singleUse:
+          type: boolean
+          description: Whether the link can be paid only once.
+          example: true
+        paymentMethod:
+          type: string
+          description: Payment method used to collect the funds.
+          example: CASH
+        cashinCode:
+          type: string
+          description: Cash-in code the payer presents at the collection point.
+          example: CI-482913
+        cashinEntity:
+          type: string
+          description: Cash-in collection entity.
+          example: CHARI
+        customerName:
+          type: string
+          description: Customer full name.
+          example: Amine Bennani
+        customerEmail:
+          type: string
+          description: Customer email address.
+          example: amine@example.com
+        customerPhone:
+          type: string
+          description: Customer phone number.
+          example: "+212600000000"
+        useCount:
+          type: integer
+          format: int32
+          description: Number of times the link has been paid.
+          example: 0
+        totalCollected:
+          type: number
+          description: Total amount collected via this link so far.
+          example: 149.9
+        expiresAt:
+          type: string
+          format: date-time
+          description: Expiry timestamp of the link.
+          example: 2026-07-31T10:15:00Z
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+          example: 2026-07-31T10:15:00Z
+        acceptUrl:
+          type: string
+          description: Redirect URL on successful payment.
+          example: https://merchant.example.com/success
+        declineUrl:
+          type: string
+          description: Redirect URL on declined payment.
+          example: https://merchant.example.com/cancel
+        notificationUrl:
+          type: string
+          description: Webhook URL notified on payment events.
+          example: https://merchant.example.com/webhooks/chari
+        payUrl:
+          type: string
+          description: Public buyer-facing payment page URL.
+          example: https://pay.chari.ma/pay/pl_3ND8xk
+    SavedPaymentMethod:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        maskedPan:
+          type: string
+        scheme:
+          type: string
+        expiryDate:
+          type: string
+        cardName:
+          type: string
+    SubscriptionResponse:
+      type: object
+      description: Merchant-facing view of a recurring subscription.
+      properties:
+        reference:
+          type: string
+          description: Unique subscription reference.
+          example: sub_7Qa1bx
+        externalId:
+          type: string
+          description: Merchant subscription identifier echoed as ExternalId in
+            subscription webhooks.
+          example: merchant-sub-8421
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Merchant reconciliation attributes echoed unchanged as metadata in
+            subscription webhooks.
+          example:
+            customerId: cus_1001
+            plan: gold
+        origin:
+          type: string
+          description: How the record was created (API or DASHBOARD).
+          enum:
+            - API
+            - DASHBOARD
+          example: API
+        status:
+          type: string
+          description: Lifecycle status. New subscriptions remain INCOMPLETE until the
+            first payment succeeds.
+          enum:
+            - INCOMPLETE
+            - ACTIVE
+            - PAST_DUE
+            - PAUSED
+            - COMPLETED
+            - CANCELED
+          example: ACTIVE
+        activatedAt:
+          type: string
+          format: date-time
+          description: When the first successful payment activated the subscription; null
+            while INCOMPLETE.
+        amount:
+          type: number
+          description: Amount billed each cycle.
+          example: 149.9
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          example: MAD
+        description:
+          type: string
+          description: Human-readable description shown to the payer.
+          example: Monthly membership
+        frequency:
+          type: string
+          description: Billing frequency.
+          enum:
+            - DAILY
+            - WEEKLY
+            - MONTHLY
+            - YEARLY
+          example: MONTHLY
+        startDate:
+          type: string
+          format: date
+          description: Date of the first billing cycle.
+          example: 2026-08-01
+        endDate:
+          type: string
+          format: date
+          description: Date the subscription ends, if bounded.
+          example: 2026-08-01
+        nextRunDate:
+          type: string
+          format: date
+          description: Date of the next scheduled charge.
+          example: 2026-08-01
+        billingTime:
+          $ref: "#/components/schemas/LocalTime"
+          description: Recurring charge time in Africa/Casablanca.
+          example: 09:00
+        autoPayEnabled:
+          type: boolean
+          description: Whether provider-token based automatic collection is enabled.
+        paymentMethod:
+          $ref: "#/components/schemas/SavedPaymentMethod"
+          description: Saved payment method safe display data. Never contains a provider
+            token, PAN or CVV.
+        billingRecovery:
+          $ref: "#/components/schemas/BillingRecovery"
+          description: Present while automatic collection is past due or retains its
+            latest recovery state.
+        clientId:
+          type: string
+          format: uuid
+          description: Identifier of the client being billed.
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        channels:
+          type: array
+          description: Delivery channels used to notify the client.
+          example:
+            - EMAIL
+          items:
+            type: string
+            enum:
+              - EMAIL
+              - PUSH
+              - SMS
+              - WHATSAPP
+              - IN_APP
+          uniqueItems: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+          example: 2026-07-31T10:15:00Z
+        currentCharge:
+          $ref: "#/components/schemas/PaymentLinkResponse"
+          description: Open charge for the current billing period, carrying the
+            buyer-facing payUrl; null when no cycle is open.
+    RefundPaymentRequest:
+      type: object
+      properties:
+        operationId:
+          type: integer
+          format: int64
+        externalId:
+          type: string
+        refundReference:
+          type: string
+          maxLength: 64
+          minLength: 0
+        refundAmount:
+          type: number
+        reason:
+          type: string
+        note:
+          type: string
+          maxLength: 128
+          minLength: 0
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+      required:
+        - reason
+        - refundReference
+    CreateProductRequest:
+      type: object
+      description: Payload to create a storefront product.
+      properties:
+        name:
+          type: string
+          description: Product name.
+          example: Chari T-shirt
+          maxLength: 255
+          minLength: 0
+        description:
+          type: string
+          description: Optional long description.
+          example: 100% cotton, unisex.
+          maxLength: 2000
+          minLength: 0
+        imageUrl:
+          type: string
+          description: Optional product image URL.
+          example: https://cdn.example.com/tshirt.png
+          maxLength: 2000
+          minLength: 0
+        price:
+          type: number
+          description: Unit price in MAD major units.
+          example: 199
+        currency:
+          type: string
+          description: ISO-4217 currency; defaults to MAD.
+          example: MAD
+          maxLength: 3
+          minLength: 0
+        stockQuantity:
+          type: integer
+          format: int32
+          description: Optional stock to track; unlimited when omitted.
+          example: 100
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional sale-ends timestamp (ISO-8601 UTC), must be in the future.
+          example: 2026-12-31T23:59:59Z
+        externalId:
+          type: string
+          description: Optional client-supplied id, unique per merchant. Creating a
+            product with an externalId that already exists returns the existing
+            product (idempotent replay).
+          example: sku-tshirt-blue-m
+          maxLength: 255
+          minLength: 0
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Optional free-form metadata object, echoed back on reads and in the
+            payment webhook of orders for this product.
+          example:
+            warehouse: CASA-1
+      required:
+        - name
+        - price
+    ProductAnalyticsResponse:
+      type: object
+      properties:
+        views:
+          type: integer
+          format: int64
+        clicks:
+          type: integer
+          format: int64
+        purchases:
+          type: integer
+          format: int64
+        clickThroughRate:
+          type: number
+    ProductResponse:
+      type: object
+      description: Merchant-facing view of an e-commerce product.
+      properties:
+        reference:
+          type: string
+          description: Unique product reference.
+          example: prod_2Bc9Zt
+        externalId:
+          type: string
+          description: Merchant-supplied external identifier.
+          example: order-1234
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Free-form merchant metadata.
+          example:
+            cartId: c_987
+        origin:
+          type: string
+          description: How the record was created (API or DASHBOARD).
+          enum:
+            - API
+            - DASHBOARD
+          example: API
+        name:
+          type: string
+          description: Product name.
+          example: Chari T-shirt
+        description:
+          type: string
+          description: Product description.
+          example: Premium cotton T-shirt
+        imageUrl:
+          type: string
+          description: Product image URL.
+          example: https://ecom.chari.ma/img/prod_2Bc9Zt.png
+        price:
+          type: number
+          description: Unit price.
+          example: 149.9
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          example: MAD
+        active:
+          type: boolean
+          description: Whether the product is active and sellable.
+          example: true
+        expiresAt:
+          type: string
+          format: date-time
+          description: Expiry timestamp of the product listing.
+          example: 2026-07-31T10:15:00Z
+        expired:
+          type: boolean
+          description: Whether the listing has expired.
+          example: false
+        stockQuantity:
+          type: integer
+          format: int32
+          description: Total stock quantity.
+          example: 100
+        reservedQuantity:
+          type: integer
+          format: int32
+          description: Quantity reserved by open orders.
+          example: 0
+        availableQuantity:
+          type: integer
+          format: int32
+          description: Quantity available for sale.
+          example: 100
+        inStock:
+          type: boolean
+          description: Whether the product is currently in stock.
+          example: true
+        analytics:
+          $ref: "#/components/schemas/ProductAnalyticsResponse"
+          description: Sales analytics for the product.
+        shopUrl:
+          type: string
+          description: Shareable customer-facing storefront link.
+          example: https://ecom.chari.ma/shop/prod_2Bc9Zt
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+          example: 2026-07-31T10:15:00Z
+    CheckoutSessionConfig:
+      type: object
+      description: Buyer, redirect URLs and options for the checkout.
+      properties:
+        customer:
+          $ref: "#/components/schemas/CheckoutSessionCustomer"
+        urls:
+          $ref: "#/components/schemas/CheckoutSessionUrls"
+          description: Optional redirect / notification URLs. Any field left unset falls
+            back to the merchant's configured default, then the platform
+            default.
+        keepAlive:
+          type: boolean
+          description: Keep the session alive after a failed attempt so the buyer can
+            retry. Defaults to false.
+          example: false
+        frontend:
+          $ref: "#/components/schemas/CheckoutSessionFrontend"
+        settlement:
+          $ref: "#/components/schemas/CheckoutSessionSettlement"
+      required:
+        - customer
+    CheckoutSessionCustomer:
+      type: object
+      description: The buyer being charged.
+      properties:
+        email:
+          type: string
+          description: Buyer e-mail.
+          example: buyer@example.com
+        phone:
+          type: string
+          description: Buyer phone (E.164).
+          example: "+212600000000"
+        firstName:
+          type: string
+          description: Buyer first name.
+          example: Amine
+        lastName:
+          type: string
+          description: Buyer last name.
+          example: Bennani
+        phoneClient:
+          type: string
+          description: Optional secondary phone.
+          example: "+212611111111"
+      required:
+        - email
+        - firstName
+        - lastName
+        - phone
+    CheckoutSessionFrontend:
+      type: object
+      description: Optional branding for the hosted checkout page.
+      properties:
+        theme:
+          type: string
+          description: Theme name.
+          example: light
+        logo:
+          type: string
+          description: Logo URL.
+          example: https://cdn.example.com/logo.png
+        companyName:
+          type: string
+          description: Company name shown on checkout.
+          example: Acme SARL
+    CheckoutSessionSettlement:
+      type: object
+      description: Optional distribution — sub-merchant wallet to credit.
+      properties:
+        walletId:
+          type: string
+          format: uuid
+          description: Destination sub-merchant wallet id.
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        subMerchantReference:
+          type: string
+          description: Destination sub-merchant reference.
+          example: subm_9Zt2Bc
+    CheckoutSessionUrls:
+      type: object
+      description: Redirect and webhook URLs (all https://, all optional).
+      properties:
+        accept:
+          type: string
+          description: Success redirect (https://). Falls back to merchant, then platform,
+            default.
+          example: https://merchant.example.com/success
+          pattern: ^https://\S+$
+        decline:
+          type: string
+          description: Failure redirect (https://). Falls back to merchant, then platform,
+            default.
+          example: https://merchant.example.com/cancel
+          pattern: ^https://\S+$
+        notification:
+          type: string
+          description: Per-session webhook target (https://). Falls back to the merchant
+            default.
+          example: https://merchant.example.com/webhooks/charipay
+          pattern: ^https://\S+$
+        externalReference:
+          type: string
+          description: Merchant business key echoed as ExternalId in webhooks. Defaults to
+            orderId.
+          example: ORD-2026-0001
+    CreateCheckoutSessionRequest:
+      type: object
+      description: Payload to create a one-shot hosted checkout session.
+      properties:
+        amount:
+          type: number
+          description: Amount to collect, in MAD major units.
+          example: 250
+        orderId:
+          type: string
+          description: Your order/business reference for this checkout.
+          example: ORD-2026-0001
+        singleUse:
+          type: boolean
+          description: Single-use session (recommended). Defaults to true.
+          example: true
+        externalId:
+          type: string
+          description: Optional client-supplied id, unique per merchant; a duplicate value
+            replays the existing session. Distinct from
+            orderId/externalReference, which are not uniqueness-enforced.
+          example: order-1234
+        config:
+          $ref: "#/components/schemas/CheckoutSessionConfig"
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Free-form metadata object (≤ 4 KB) echoed back in the payment
+            webhook.
+          example:
+            cartId: c_987
+            source: web
+        expiresAt:
+          type: string
+          format: date-time
+          description: Session expiry (ISO-8601 UTC). Must be in the future; defaults to
+            72h after creation.
+          example: 2026-08-03T10:00:00Z
+        notifyOnFailure:
+          type: boolean
+          description: Also send a payment.failed webhook when the payment fails. Defaults
+            to false.
+          example: false
+      required:
+        - amount
+        - config
+        - orderId
+    StorePaymentDataResponse:
+      type: object
+      description: Result of storing payment data for a new checkout session.
+      properties:
+        sessionId:
+          type: string
+          description: Unique payment-session identifier.
+          example: ps_5Kd0Rn
+        sessionToken:
+          type: string
+          description: Server-side session token.
+          example: st_live_9f3c…
+        verifyKey:
+          type: string
+          description: Single-use verify key passed as the vk URL parameter.
+          example: vk_5Kd0Rn
+        expiresAt:
+          type: string
+          format: date-time
+          description: Session expiry timestamp.
+          example: 2026-07-31T10:15:00Z
+        checkoutUrl:
+          type: string
+          description: Hosted checkout page URL.
+          example: https://pay.chari.ma/checkout/ps_5Kd0Rn
+    SendPaymentLinkRequest:
+      type: object
+      description: Optional override recipient for the link e-mail.
+      properties:
+        email:
+          type: string
+          description: Recipient e-mail; falls back to the link's stored customer e-mail
+            when omitted.
+          example: buyer@example.com
+    CreatePaymentLinkRequest:
+      type: object
+      description: Payload to create a reusable payment link.
+      properties:
+        amount:
+          type: number
+          description: Amount to collect, in MAD major units.
+          example: 149.9
+        description:
+          type: string
+          description: Short description shown to the buyer.
+          example: "Order #1234"
+          maxLength: 255
+          minLength: 0
+        singleUse:
+          type: boolean
+          description: true = link is consumed after one successful payment; false =
+            reusable. Defaults to true.
+          example: false
+        paymentMethod:
+          type: string
+          description: Default method shown on the hosted checkout. Defaults to CARD.
+          enum:
+            - CARD
+            - CASH
+          example: CARD
+        customerName:
+          type: string
+          description: Optional buyer name.
+          example: Amine Bennani
+          maxLength: 255
+          minLength: 0
+        customerEmail:
+          type: string
+          description: Optional buyer e-mail.
+          example: buyer@example.com
+          maxLength: 255
+          minLength: 0
+        customerPhone:
+          type: string
+          description: Optional buyer phone (E.164).
+          example: "+212600000000"
+          maxLength: 30
+          minLength: 0
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional expiry (ISO-8601 UTC). Must be in the future.
+          example: 2026-12-31T23:59:59Z
+        acceptUrl:
+          type: string
+          description: Buyer is redirected here after a successful payment (https:// only).
+          example: https://merchant.example.com/success
+          maxLength: 2048
+          minLength: 0
+          pattern: ^https://\S+$
+        declineUrl:
+          type: string
+          description: Buyer is redirected here after a failed/declined payment (https://
+            only).
+          example: https://merchant.example.com/cancel
+          maxLength: 2048
+          minLength: 0
+          pattern: ^https://\S+$
+        notificationUrl:
+          type: string
+          description: Per-link webhook target (https:// only), in addition to registered
+            endpoints.
+          example: https://merchant.example.com/webhooks/charipay
+          maxLength: 2048
+          minLength: 0
+          pattern: ^https://\S+$
+        externalId:
+          type: string
+          description: Optional client-supplied id, unique per merchant. Creating a link
+            with an externalId that already exists returns the existing link
+            (idempotent replay).
+          example: order-1234
+          maxLength: 255
+          minLength: 0
+        metadata:
+          type: object
+          additionalProperties:
+            type: object
+          description: Optional free-form metadata object, echoed back on reads and in the
+            payment webhook when the link is paid.
+          example:
+            cartId: c_987
+      required:
+        - amount
+        - description
+    WebhookEndpointRequest:
+      type: object
+      description: Create or update a signed outbound webhook endpoint.
+      properties:
+        url:
+          type: string
+          description: Public HTTPS receiver URL on port 443. Private, loopback,
+            link-local and non-HTTPS targets are rejected.
+          example: https://merchant.example.com/webhooks/charipay
+          maxLength: 2000
+          minLength: 0
+        description:
+          type: string
+          description: Merchant-facing endpoint label.
+          example: Production billing events
+          maxLength: 500
+          minLength: 0
+        enabledEvents:
+          type: array
+          description: Explicit event allowlist. Null or empty subscribes to every current
+            and future event; an explicit list is recommended for stable
+            integrations.
+          example:
+            - payment.succeeded
+            - subscription.payment_succeeded
+            - subscription.payment_failed
+          items:
+            type: string
+            description: Webhook event name used in enabledEvents and the Chari-Event-Type
+              delivery header. The public-v1 guide identifies which names are
+              currently emitted and which are reserved for future products.
+            enum:
+              - payment_link.created
+              - payment_link.updated
+              - payment_link.expired
+              - payment_link.cancelled
+              - payment.initiated
+              - payment.requires_action
+              - payment.succeeded
+              - payment.failed
+              - subscription.payment_succeeded
+              - subscription.payment_failed
+              - subscription.canceled
+              - refund.initiated
+              - refund.succeeded
+              - refund.failed
+              - security.token_reused
+              - security.rate_limit_exceeded
+              - security.invalid_signature
+              - wallet.activated
+              - wallet.rejected
+              - payout.completed
+              - payout.failed
+              - submerchant.near_cap
+              - wallet.funded
+              - wallet.transfer_completed
+              - merchant_transfer.completed
+              - merchant_transfer.failed
+              - topup.pending
+              - topup.succeeded
+              - topup.failed
+              - topup.reversed
+              - bill_payment.pending
+              - bill_payment.succeeded
+              - bill_payment.failed
+              - bill_payment.reversed
+              - voucher.issued
+              - voucher.failed
+              - voucher.redeemed
+              - voucher.expired
+              - savings.deposit_succeeded
+              - savings.withdrawal_succeeded
+              - savings.instruction_failed
+              - savings.goal_reached
+              - order.paid
+              - cash_collection.deposit.completed
+          uniqueItems: true
+        customHeaders:
+          type: object
+          additionalProperties:
+            type: string
+          description: Optional static routing headers. Host, Authorization, Cookie,
+            Chari-* and X-CHARI-* cannot be overridden.
+          example:
+            X-Tenant: acme
+        apiVersion:
+          type: string
+          description: Webhook payload contract version.
+          example: 2024-01-01
+          maxLength: 20
+          minLength: 0
+        enabled:
+          type: boolean
+          description: Whether delivery starts immediately.
+          example: true
+        environment:
+          type: string
+          description: SANDBOX or PRODUCTION. Portal routes only — defaults to PRODUCTION
+            when omitted. Ignored on /api/v1/partner/** where the API key
+            decides, and ignored on update (an endpoint cannot move between
+            environments; delete and re-create instead).
+          enum:
+            - SANDBOX
+            - PRODUCTION
+          example: SANDBOX
+      required:
+        - url
+    WebhookEndpointResponse:
+      type: object
+      description: Registered signed webhook endpoint and delivery health.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Endpoint identifier used for reads, updates, rotation and deletion.
+        object:
+          type: string
+        environment:
+          type: string
+          description: Environment this endpoint belongs to. Only events of the same
+            environment are delivered to it.
+          enum:
+            - SANDBOX
+            - PRODUCTION
+          example: SANDBOX
+        url:
+          type: string
+          description: Public HTTPS delivery URL.
+        description:
+          type: string
+        enabled:
+          type: boolean
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - DISABLED
+            - SUSPENDED
+        apiVersion:
+          type: string
+        signingSecret:
+          type: string
+          description: HMAC secret returned only on endpoint creation or rotation. Store
+            it immediately.
+          example: whsec_...
+          readOnly: true
+        enabledEvents:
+          type: array
+          description: Canonical Chari-Event-Type values delivered to this endpoint.
+          items:
+            type: string
+          uniqueItems: true
+        previousSecretExpiresAt:
+          type: string
+          format: date-time
+          description: "While set, the previous signing secret still verifies and
+            deliveries carry both signatures: X-CHARI-SIGNATURE (old) and
+            X-CHARI-SIGNATURE-NEXT (new)."
+        customHeaders:
+          type: object
+          additionalProperties:
+            type: string
+          description: Static non-reserved routing headers added to deliveries.
+        consecutiveFailures:
+          type: integer
+          format: int32
+          description: Failed attempts since the last success; resets on any 2xx.
+        suspendedAt:
+          type: string
+          format: date-time
+          description: When the endpoint was auto-suspended, if it is SUSPENDED.
+        totalDeliveries:
+          type: integer
+          format: int64
+        successfulDeliveries:
+          type: integer
+          format: int64
+        failedDeliveries:
+          type: integer
+          format: int64
+        successRate:
+          type: number
+          format: double
+        lastDeliveryAt:
+          type: string
+          format: date-time
+        lastSuccessAt:
+          type: string
+          format: date-time
+        lastFailureAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        livemode:
+          type: boolean
+          description: True for a production-key endpoint; false for sandbox.
+    CreateClientRequest:
+      type: object
+      description: Payload to create a reusable customer (client) record.
+      properties:
+        name:
+          type: string
+          description: Client full name.
+          example: Amine Bennani
+          maxLength: 255
+          minLength: 0
+        email:
+          type: string
+          description: Optional client e-mail.
+          example: amine@example.com
+          maxLength: 255
+          minLength: 0
+        phone:
+          type: string
+          description: Optional client phone (E.164).
+          example: "+212600000000"
+          maxLength: 30
+          minLength: 0
+      required:
+        - name
+    ClientResponse:
+      type: object
+      description: Merchant-facing view of a client (payer).
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique client identifier.
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        name:
+          type: string
+          description: Client full name.
+          example: Amine Bennani
+        email:
+          type: string
+          description: Client email address.
+          example: amine@example.com
+        phone:
+          type: string
+          description: Client phone number.
+          example: "+212600000000"
+        origin:
+          type: string
+          description: How the record was created (API or DASHBOARD).
+          enum:
+            - API
+            - DASHBOARD
+          example: API
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+          example: 2026-07-31T10:15:00Z
+    UpdateProductRequest:
+      type: object
+      description: Partial-update body for a product. Only the fields present are changed.
+      properties:
+        name:
+          type: string
+          description: Product name. Optional; only applied when present.
+          example: Chari T-shirt
+          maxLength: 255
+          minLength: 0
+        description:
+          type: string
+          description: Product description. Optional; only applied when present.
+          example: Premium cotton T-shirt
+          maxLength: 2000
+          minLength: 0
+        imageUrl:
+          type: string
+          description: Product image URL. Optional; only applied when present.
+          example: https://ecom.chari.ma/img/prod_2Bc9Zt.png
+          maxLength: 2000
+          minLength: 0
+        price:
+          type: number
+          description: Unit price. Optional; only applied when present.
+          example: 149.9
+        active:
+          type: boolean
+          description: Whether the product is active. Optional; only applied when present.
+          example: true
+        stockQuantity:
+          type: integer
+          format: int32
+          description: Total stock quantity. Optional; only applied when present.
+          example: 100
+        expiresAt:
+          type: string
+          format: date-time
+          description: Expiry timestamp of the listing. Optional; only applied when present.
+          example: 2026-07-31T10:15:00Z
+        clearExpiration:
+          type: boolean
+          description: Set to true to clear the existing expiration. Optional; only
+            applied when present.
+          example: false
+    PublicPaymentStatusResponse:
+      type: object
+      properties:
+        reference:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        paid:
+          type: boolean
+    Pageable:
+      type: object
+      properties:
+        page:
+          type: integer
+          format: int32
+          minimum: 0
+        size:
+          type: integer
+          format: int32
+          minimum: 1
+        sort:
+          type: array
+          items:
+            type: string
+    PageWebhookEventResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: "#/components/schemas/PageableObject"
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventResponse"
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: "#/components/schemas/SortObject"
+        empty:
+          type: boolean
+    PageableObject:
+      type: object
+      properties:
+        unpaged:
+          type: boolean
+        paged:
+          type: boolean
+        pageSize:
+          type: integer
+          format: int32
+        pageNumber:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int64
+        sort:
+          $ref: "#/components/schemas/SortObject"
+    SortObject:
+      type: object
+      properties:
+        unsorted:
+          type: boolean
+        sorted:
+          type: boolean
+        empty:
+          type: boolean
+    WebhookEventResponse:
+      type: object
+      description: An emitted webhook event and its delivery state.
+      properties:
+        object:
+          type: string
+        id:
+          type: string
+          format: uuid
+          description: Delivery record identifier — pass this to the replay endpoint.
+        eventId:
+          type: string
+          format: uuid
+          description: Idempotency key sent as the Chari-Event-Id header and body
+            WebhookEventId.
+        eventType:
+          type: string
+          description: Canonical event name, same value as the Chari-Event-Type header.
+          example: payment.succeeded
+        endpointId:
+          type: string
+          format: uuid
+          description: Endpoint this event was delivered to.
+        status:
+          type: string
+          enum:
+            - pending
+            - sending
+            - delivered
+            - failed
+            - retrying
+            - exhausted
+            - skipped
+        resourceType:
+          type: string
+          description: Business object the event is about.
+          example: payment_operation
+        resourceId:
+          type: string
+          format: uuid
+        paymentLinkId:
+          type: string
+          format: uuid
+        attemptCount:
+          type: integer
+          format: int32
+        maxAttempts:
+          type: integer
+          format: int32
+        responseStatus:
+          type: integer
+          format: int32
+          description: HTTP status returned by the receiver on the last attempt.
+          example: 200
+        responseTimeMs:
+          type: integer
+          format: int64
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastAttemptAt:
+          type: string
+          format: date-time
+        nextRetryAt:
+          type: string
+          format: date-time
+        deliveredAt:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties:
+            type: object
+          description: Exact JSON body that was signed and sent. Returned on single-event
+            reads only.
+    WebhookEventTypeResponse:
+      type: object
+      description: One subscribable webhook event type.
+      properties:
+        object:
+          type: string
+        value:
+          type: string
+          description: Canonical value to send in enabledEvents and received in the
+            Chari-Event-Type header.
+          example: payment.succeeded
+        group:
+          type: string
+          description: Event group, i.e. the part before the dot.
+          example: payment
+        description:
+          type: string
+          description: Human readable description.
+          example: Payment completed successfully
+        emitted:
+          type: boolean
+          description: Whether this release actually emits the event. Reserved events can
+            be subscribed to but are not delivered yet.
+          example: true
+    PageWebhookEndpointResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: "#/components/schemas/PageableObject"
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEndpointResponse"
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: "#/components/schemas/SortObject"
+        empty:
+          type: boolean
+    ClientPaymentMethodResponse:
+      type: object
+      description: Safe client-owned saved-card view. Provider token and all vault
+        material are never returned.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Local reusable payment-method identifier.
+        clientId:
+          type: string
+          format: uuid
+          description: Client that owns this payment method.
+        maskedPan:
+          type: string
+          description: Masked PAN only.
+          example: "**** **** **** 1111"
+        scheme:
+          type: string
+          example: VISA
+        expiryDate:
+          type: string
+          description: Display expiry returned by the provider.
+          example: 12/27
+        cardName:
+          type: string
+          example: Personal Visa
+        defaultMethod:
+          type: boolean
+          description: Whether new subscriptions use this method by default.
+        createdAt:
+          type: string
+          format: date-time
+  securitySchemes:
+    bearerAuth:
+      type: http
+      description: Portal JWT — enter your bearer token
+      name: bearerAuth
+      scheme: bearer
+      bearerFormat: JWT
+    apiKey:
+      type: apiKey
+      description: Your Chari Pay API key. A SANDBOX key (`chari_sk_test_...`) targets
+        the sandbox environment; a PRODUCTION key (`chari_sk_live_...`) targets
+        live. Never expose it in client-side code.
+      name: X-CHARI-PAY-API-KEY
+      in: header

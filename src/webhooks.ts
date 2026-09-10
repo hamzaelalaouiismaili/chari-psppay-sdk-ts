@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ChariPaySignatureVerificationError } from './errors.js';
-import { isKnownEventType, type ChariPayEvent } from './types/events.js';
+import type { ChariPayEvent } from './types/events.js';
 
 /** Node hands headers over as strings or arrays; accept both. */
 export type HeaderBag = Record<string, string | string[] | undefined>;

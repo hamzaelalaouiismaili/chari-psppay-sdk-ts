@@ -18,7 +18,7 @@ import type { ChariPayEvent } from '../src/types/events.js';
 /** Injection token for the raw options object. */
 export const CHARI_PAY_OPTIONS = Symbol('CHARI_PAY_OPTIONS');
 
-export interface ChariPayModuleOptions extends ChariPayConfig {}
+export type ChariPayModuleOptions = ChariPayConfig;
 
 export interface ChariPayModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
   inject?: unknown[];

@@ -56,7 +56,8 @@ describe('transactions', () => {
     const chari = new ChariPay({ apiKey: 'chari_sk_test_EXAMPLE', fetch: fetchMock as unknown as typeof fetch });
 
     let n = 0;
-    for await (const _tx of chari.transactions.list({ page: 2 })) {
+    for await (const tx of chari.transactions.list({ page: 2 })) {
+      void tx;
       n += 1;
       if (n >= 3) break;
     }

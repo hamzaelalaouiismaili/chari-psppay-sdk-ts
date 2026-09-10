@@ -25,6 +25,15 @@ export type {
 export type {
   CreateProductParams, UpdateProductParams, Product, ListProductsParams,
 } from './resources/products.js';
+export type {
+  CreateSubscriptionParams,
+  Subscription,
+  SelectSubscriptionPaymentMethodParams,
+  SubscriptionAutoPayTestResult,
+  ListSubscriptionsParams,
+} from './resources/subscriptions.js';
+export type { CreateRefundParams, ListRefundsParams } from './resources/refunds.js';
+export type { JourneyResourceType } from './resources/analytics.js';
 export * from './errors.js';
 export * from './types/gaps.js';
 export type { components } from './generated/api.js';

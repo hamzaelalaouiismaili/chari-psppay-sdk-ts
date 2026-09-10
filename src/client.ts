@@ -1,9 +1,12 @@
 import { HttpClient, type ChariPayRequestInfo, type ChariPayResponseInfo, type ResolvedConfig } from './http.js';
+import { AnalyticsResource } from './resources/analytics.js';
 import { CheckoutResource } from './resources/checkout.js';
 import { CheckoutSessionsResource } from './resources/checkout-sessions.js';
 import { ClientsResource } from './resources/clients.js';
 import { PaymentLinksResource } from './resources/payment-links.js';
 import { ProductsResource } from './resources/products.js';
+import { RefundsResource } from './resources/refunds.js';
+import { SubscriptionsResource } from './resources/subscriptions.js';
 import { TransactionsResource } from './resources/transactions.js';
 import { WalletResource } from './resources/wallet.js';
 
@@ -53,6 +56,9 @@ export class ChariPay {
   readonly checkout: CheckoutResource;
   readonly clients: ClientsResource;
   readonly products: ProductsResource;
+  readonly subscriptions: SubscriptionsResource;
+  readonly refunds: RefundsResource;
+  readonly analytics: AnalyticsResource;
 
   constructor(config: ChariPayConfig | string) {
     const input: ChariPayConfig = typeof config === 'string' ? { apiKey: config } : config ?? ({} as ChariPayConfig);
@@ -87,6 +93,9 @@ export class ChariPay {
     this.checkout = new CheckoutResource(this.http);
     this.clients = new ClientsResource(this.http);
     this.products = new ProductsResource(this.http);
+    this.subscriptions = new SubscriptionsResource(this.http);
+    this.refunds = new RefundsResource(this.http);
+    this.analytics = new AnalyticsResource(this.http);
   }
 
   /** True when the key resolved to the sandbox environment. */

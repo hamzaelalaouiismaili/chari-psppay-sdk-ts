@@ -84,3 +84,60 @@ export interface ProductOrder {
   createdAt?: string;
   [key: string]: unknown;
 }
+
+/**
+ * `GET /v1/refunds` item and `POST /v1/refunds` result.
+ * @remarks Not defined in api-1.yaml; modelled from the endpoint description.
+ * Verify against sandbox before 1.0.0.
+ */
+export interface Refund {
+  reference?: string;
+  transactionReference?: string;
+  amount?: number;
+  currency?: string;
+  status?: 'PENDING' | 'SUCCESS' | 'FAILED';
+  reason?: string;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * `GET /v1/subscriptions/{reference}/charges` item.
+ * @remarks Not defined in api-1.yaml; modelled from the endpoint description.
+ * Verify against sandbox before 1.0.0.
+ */
+export interface SubscriptionCharge {
+  reference?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  amount?: number;
+  status?: string;
+  paymentLinkReference?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * `GET /v1/analytics/journeys/{type}/{id}/summary`.
+ * @remarks Not defined in api-1.yaml; modelled from the endpoint description.
+ * Verify against sandbox before 1.0.0.
+ */
+export interface JourneySummary {
+  views?: number;
+  starts?: number;
+  completions?: number;
+  conversionRate?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * `GET /v1/analytics/journeys/{type}/{id}/events` item.
+ * @remarks Not defined in api-1.yaml; modelled from the endpoint description.
+ * Verify against sandbox before 1.0.0.
+ */
+export interface JourneyEvent {
+  at?: string;
+  step?: string;
+  channel?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}

@@ -56,8 +56,12 @@ export class PagePromise<T> implements PromiseLike<Page<T>> {
       if (!page.content.length) return;
       for (const item of page.content) yield item;
 
+      // The server's own `number` is the absolute page just returned; prefer
+      // it over the loop-local `index`, which is relative to iteration start
+      // and wrong once `paginate()` begins at a non-zero offset.
+      const current = typeof page.number === 'number' ? page.number : index;
       // Trust an empty page over a totalPages that may be stale or absent.
-      if (page.totalPages !== undefined && index + 1 >= page.totalPages) return;
+      if (page.totalPages !== undefined && current + 1 >= page.totalPages) return;
       index += 1;
     }
   }

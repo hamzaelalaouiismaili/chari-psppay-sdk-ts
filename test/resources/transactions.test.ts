@@ -38,6 +38,35 @@ describe('transactions', () => {
     expect(calls[1]).toContain('page=1');
   });
 
+  it('starts a single await at the caller\'s page, not page 0', async () => {
+    const { chari, calls } = paged([{ content: [{ operationId: 1 }], totalPages: 5, number: 2 }]);
+    await chari.transactions.list({ page: 2 });
+    expect(calls[0]).toContain('page=2');
+  });
+
+  it('treats the caller\'s page as a starting offset while iterating, not a pin', async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      calls.push(String(url));
+      // totalPages left generous so the loop keeps walking forward instead of
+      // terminating -- the test controls how many pages it consumes itself.
+      const body = { content: [{ operationId: calls.length }], totalPages: 10, number: 0 };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const chari = new ChariPay({ apiKey: 'chari_sk_test_EXAMPLE', fetch: fetchMock as unknown as typeof fetch });
+
+    let n = 0;
+    for await (const _tx of chari.transactions.list({ page: 2 })) {
+      n += 1;
+      if (n >= 3) break;
+    }
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain('page=2');
+    expect(calls[1]).toContain('page=3');
+    expect(calls[2]).toContain('page=4');
+  });
+
   it('retrieves one transaction', async () => {
     const { chari, calls } = paged([{ content: [], totalPages: 1, number: 0 }]);
     await chari.transactions.retrieve('op_42');

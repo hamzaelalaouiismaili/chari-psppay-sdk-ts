@@ -64,6 +64,23 @@ describe('PagePromise', () => {
     );
   });
 
+  it('stops at the last page without an out-of-range fetch when iteration starts there', async () => {
+    // Simulates what paginate() does when the caller starts at a non-zero
+    // offset: the server's `number` reports the absolute page (2 of 3), which
+    // the loop-local index (always starting at 0) does not know about. Before
+    // the fix, `index + 1 >= totalPages` used index=0 and never terminated on
+    // the first call, issuing a second, out-of-range fetch.
+    const fetcher = vi.fn(async (page: number) => ({
+      content: page === 0 ? [9] : [],
+      number: 2,
+      totalPages: 3,
+    }));
+    const seen: number[] = [];
+    for await (const item of new PagePromise(fetcher)) seen.push(item);
+    expect(seen).toEqual([9]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it('tolerates a bare array response', async () => {
     const page = await new PagePromise(async () => [7, 8] as unknown as Page<number>);
     expect(page.content).toEqual([7, 8]);

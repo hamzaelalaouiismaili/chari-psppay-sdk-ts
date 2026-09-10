@@ -1,0 +1,107 @@
+# Decisions and known limitations
+
+Design decisions taken during implementation that a reader of the code would not
+otherwise be able to reconstruct, plus the issues deliberately left open for 1.0.
+
+The design spec is `docs/design.md`.
+
+---
+
+## Deliberate trade-offs
+
+### `ChariPayEvent` is a pure 21-member union, and that is an approximation
+
+`if (event.type === 'payment.succeeded') { event.data.amount }` narrows to
+`number | undefined` with no extra check. That ergonomics is the point — it is
+the SDK's most-used line.
+
+The cost: TypeScript cannot express "any string except these 21 literals", so a
+catch-all member with a non-literal discriminant would defeat narrowing for the
+*whole* union. The union therefore lists only the 21 known events, while at
+runtime an unrecognised `type` still arrives and is still returned without
+throwing.
+
+**Consequence for you:** keep a `default` / `else` branch. An exhaustiveness
+check against `never` will wrongly believe the 21 cases are total, and a caller
+without a fallback silently ignores new Chari Pay event types. Use
+`isKnownEventType()` or `ChariPayUnknownEvent` when you need a sound check.
+
+### `apiKey` is required even for keyless checkout
+
+The four `/checkout/*` operations are declared `security: []` upstream and never
+transmit `X-CHARI-PAY-API-KEY`. A checkout-only integration still has to supply
+an `apiKey` to construct the client; any non-empty placeholder works, since it is
+never sent on those calls. Kept mandatory for 1.0 to avoid a config shape whose
+validity depends on which methods you happen to call.
+
+### Pagination trusts the server's `Page.number`
+
+Iteration decides it has reached the last page using the server-reported
+absolute page index, falling back to the loop index when the server omits it.
+A backend that misreports `number` could therefore terminate iteration early.
+The alternative — counting loop iterations — is wrong whenever a caller starts
+at a non-zero `page`, which is the more common failure.
+
+### Subpath entries share one runtime copy
+
+`@chari-pay/sdk/webhooks`, `/express` and `/nestjs` import the package root by
+its own name rather than re-bundling `src/`. Without this, each entry carried its
+own copy of every class: NestJS dependency injection broke on its documented
+path, and cross-entry `instanceof` failed, turning documented 400 responses into
+500s. `test/dist.test.ts` asserts constructor identity across all four entries in
+both CJS and ESM — it must keep asserting identity, not `instanceof`, because
+`ChariPayError`'s `Symbol.hasInstance` brand would satisfy `instanceof` even if
+re-bundling regressed.
+
+---
+
+## Known limitations
+
+Real, understood, and not fixed. Ranked by how likely they are to matter.
+
+1. **A custom `onError` on the Express middleware bypasses `Connection: close`.**
+   On a body-size or read-timeout rejection the default path sets that header so
+   the socket is torn down after the 413/408. A user-supplied `onError` replaces
+   that response and can leave the connection open, weakening the slowloris
+   mitigation. Set the header yourself if you override `onError`.
+
+2. **The `webhooks` entry does not re-export the error classes.** A webhook-only
+   service that wants `catch (e) { if (e instanceof ChariPaySignatureVerificationError) }`
+   must import them from the package root. Verification itself works fine.
+
+3. **Cardholder name reaches `onRequest` unredacted.** `pan`, `cvv` and
+   `expiryDate` are redacted before the hook sees a body; `firstName` /
+   `lastName` are not. That is PII, not PCI cardholder data, but treat your log
+   sink accordingly. Conversely, fields matching `number` or `token` are
+   redacted in the hook's view even when benign — the wire body is never altered.
+
+4. **`captureRawBody` skips zero-length bodies**, so an empty payload behind a
+   global `express.json()` produces a setup error rather than a verification
+   attempt. An empty webhook delivery is not a real case, and the error is loud.
+
+5. **`parseFilename` does not percent-decode RFC 5987 `filename*=UTF-8''…`.**
+   Affects only the suggested filename on binary downloads.
+
+6. **The hand-modelled types are unverified against a live sandbox.** Every type
+   in `src/types/gaps.ts` and `src/types/events.ts` carries an explicit
+   `@remarks Not defined in api-1.yaml` line. 32 of the API's 62 operations have
+   no documented success schema, and the OpenAPI spec defines webhook event
+   *names* but no per-event payload schema. These shapes are a careful reading of
+   the endpoint documentation, not a contract. Verify them against real sandbox
+   traffic before depending on a field, and before 1.0.
+
+7. **`GET /v1/transactions` accepts both `cursor`/`limit` and a Spring
+   `pageable`.** Both are exposed; which one the server actually honours has not
+   been confirmed against the sandbox.
+
+---
+
+## Testing notes for maintainers
+
+- The `expectTypeOf` tests in `test/events.types.test.ts` are **runtime no-ops** —
+  vitest strips types. Only `npx tsc --noEmit` enforces them, which CI runs.
+- `test/dist.test.ts` runs against built output and is excluded from `npm test`.
+  Run `npm run test:dist` (it builds first); CI runs it after the build step.
+- The coverage map's headline `expect(total).toBe(62)` sums its own literal map
+  and is self-referential. The 62 per-method assertions beneath it are what
+  actually check the shipped `ChariPay` instance.

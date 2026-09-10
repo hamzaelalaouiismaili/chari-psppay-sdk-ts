@@ -554,8 +554,15 @@ None blocking. Two to revisit during implementation:
 2. `GET /v1/transactions` accepts both `cursor`/`limit` and a Spring `pageable`
    — confirm against the sandbox which one the server honours, and expose only
    that one.
-3. `apiKey` is required by `ChariPayConfig`, yet the four `/checkout/*`
+3. **Decided (final review, 2026-09-10): `apiKey` stays mandatory for 1.0.**
+   `apiKey` is required by `ChariPayConfig`, yet the four `/checkout/*`
    operations never send one. An integrator using only the direct-API checkout
-   is forced to supply a key it will not use. Decide during implementation
-   whether `apiKey` becomes optional, with any keyed call throwing a clear
-   `ChariPayAuthenticationError` explaining the omission.
+   is forced to supply a key it will not use — but the alternative (an
+   optional `apiKey`, with any keyed call throwing a clear
+   `ChariPayAuthenticationError`) was rejected: it widens the constructor's
+   contract and its failure surface (every keyed resource would need to
+   handle "no key" at call time) for a convenience that a placeholder value
+   already provides. The constructor keeps requiring a non-empty `apiKey`
+   unconditionally; a checkout-only integrator passes any non-empty
+   placeholder, since the key is never transmitted on `/checkout/*` calls.
+   The README's Direct-API checkout section documents this explicitly.

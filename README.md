@@ -280,6 +280,8 @@ export async function POST(request: Request): Promise<Response> {
 `chari.checkout.verify`, `.submit`, `.confirmReturn` and `.paymentStatus` — the four operations under `/checkout/*` — talk to the API server-to-server, without the hosted payment page.
 
 > **These four calls send no API key.** `api-1.yaml` declares them public (`security: []`) and their descriptions say not to send `X-CHARI-PAY-API-KEY` at all; the SDK omits the auth header automatically for them. Because you are handling raw card data yourself, using this path puts **you** in PCI DSS scope — prefer a hosted payment link or the hosted checkout session page unless you are certain you need direct submission.
+>
+> **`ChariPay` still requires an `apiKey`, even for a checkout-only integration.** The constructor rejects a missing or empty key regardless of which operations you end up calling — `apiKey` stays mandatory for 1.0 (see `docs/design.md`). If your integration only ever calls the four `/checkout/*` operations above, the key is never transmitted on the wire, so you may construct the client with any non-empty placeholder (e.g. `new ChariPay({ apiKey: 'unused-checkout-only-key' })`) instead of a real secret key.
 
 ```ts
 // sessionId and vk both come from chari.checkoutSessions.create(...).

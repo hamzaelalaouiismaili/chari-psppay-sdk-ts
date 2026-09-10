@@ -44,15 +44,7 @@ export class ChariPayError extends Error {
     this.raw = args.raw;
     Error.captureStackTrace?.(this, new.target);
 
-    const chain: string[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    let ctor: unknown = new.target;
-    while (typeof ctor === 'function') {
-      chain.push((ctor as { name: string }).name);
-      if (ctor === ChariPayError) break;
-      ctor = Object.getPrototypeOf(ctor);
-    }
-    Object.defineProperty(this, CHARI_PAY_ERROR_BRAND, { value: chain, enumerable: false });
+    Object.defineProperty(this, CHARI_PAY_ERROR_BRAND, { value: buildErrorChain(new.target), enumerable: false });
   }
 
   /**
@@ -86,6 +78,33 @@ export class ChariPayError extends Error {
     if (this.correlationId) parts.push(`correlationId=${this.correlationId}`);
     return parts.join(' ');
   }
+}
+
+/**
+ * Walks the constructor chain rooted at `ctor` (normally `new.target`),
+ * collecting class names until it reaches `ChariPayError` itself (so the
+ * native `Error` name never joins the chain).
+ *
+ * Deliberately kept OUTSIDE the `ChariPayError` class body: referencing the
+ * class by name from *within its own body* (as the old `ctor === ChariPayError`
+ * check did, inline in the constructor) forces esbuild — when it bundles this
+ * module into several entry points (`index`, `webhooks`, `express`, `nestjs`)
+ * — to rewrite the class declaration into a named class expression with a
+ * distinct internal binding (observed as `_ChariPayError`). That internal
+ * name is what `.name`/`new.target.name` then report, which both mangles
+ * every printed error name and breaks this exact brand fallback, since
+ * `chain.includes(this.name)` would be comparing against the mangled name.
+ * A plain top-level function referencing the class from outside its body
+ * does not trigger that rewrite.
+ */
+function buildErrorChain(ctor: unknown): string[] {
+  const chain: string[] = [];
+  while (typeof ctor === 'function') {
+    chain.push((ctor as { name: string }).name);
+    if (ctor === ChariPayError) break;
+    ctor = Object.getPrototypeOf(ctor);
+  }
+  return chain;
 }
 
 /** 401 — the API key is missing, malformed, or revoked. */

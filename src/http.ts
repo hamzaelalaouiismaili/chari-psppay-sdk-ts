@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ChariPayConnectionError, ChariPayError, errorFromResponse } from './errors.js';
+import { ChariPayConnectionError, errorFromResponse } from './errors.js';
 
 /** Options every resource method accepts as its final argument. */
 export interface RequestOptions {
@@ -90,22 +90,49 @@ export class HttpClient {
 
     if (req.body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const idempotencyKey =
-      req.options?.idempotencyKey ?? (req.autoIdempotency ? randomUUID() : undefined);
-    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    // Resolved once per request in `send()`, so a retry replays the same key.
+    if (req.options?.idempotencyKey) headers['Idempotency-Key'] = req.options.idempotencyKey;
 
     if (req.options?.requestId) headers['X-Request-Id'] = req.options.requestId;
     return headers;
   }
 
-  /** One attempt. Task 4 overrides this to add retries. */
-  protected async send(req: InternalRequest): Promise<{
-    response: Response;
-    url: string;
-    startedAt: number;
-    attempt: number;
-  }> {
-    return this.attempt(req, 1);
+  /** Runs one request, retrying only when doing so is provably safe. */
+  protected async send(req: InternalRequest) {
+    // Mint the key BEFORE the first attempt so every retry replays it.
+    if (req.autoIdempotency && !req.options?.idempotencyKey) {
+      req.options = { ...req.options, idempotencyKey: randomUUID() };
+    }
+
+    const maxRetries = req.options?.maxRetries ?? this.cfg.maxRetries;
+    const retryable = this.isRetryableRequest(req);
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      try {
+        const result = await this.attempt(req, attempt);
+        if (result.response.ok || !retryable || !isRetryable(result.response.status) || attempt > maxRetries) {
+          return result;
+        }
+        await sleep(backoffMs(attempt, retryAfterSeconds(result.response)));
+        continue;
+      } catch (err) {
+        lastError = err;
+        const isConnection = err instanceof ChariPayConnectionError;
+        if (!isConnection || !retryable || attempt > maxRetries) throw err;
+        await sleep(backoffMs(attempt));
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * GET/PUT/DELETE are idempotent by definition; a POST/PATCH is only safe to
+   * replay when it carries an Idempotency-Key, which every `create*` does.
+   */
+  private isRetryableRequest(req: InternalRequest): boolean {
+    if (req.method === 'GET' || req.method === 'PUT' || req.method === 'DELETE') return true;
+    return Boolean(req.options?.idempotencyKey);
   }
 
   protected async attempt(req: InternalRequest, attempt: number) {
@@ -200,6 +227,28 @@ export function retryAfterSeconds(response: Response): number | undefined {
   if (!raw) return undefined;
   const seconds = Number(raw);
   return Number.isFinite(seconds) ? seconds : undefined;
+}
+
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_CAP_MS = 8000;
+
+/** 429 and 5xx are worth another go; every other status is a decision. */
+export function isRetryable(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
+ * Exponential backoff with full jitter, capped. A `Retry-After` from the
+ * server always wins — it knows more than we do.
+ */
+export function backoffMs(attempt: number, retryAfter?: number): number {
+  if (retryAfter !== undefined) return Math.min(retryAfter * 1000, BACKOFF_CAP_MS * 4);
+  const ceiling = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_CAP_MS);
+  return Math.max(1, Math.round(Math.random() * ceiling));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Never let a key reach a log sink, even a user-supplied one. */

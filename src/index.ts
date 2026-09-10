@@ -34,6 +34,10 @@ export type {
 } from './resources/subscriptions.js';
 export type { CreateRefundParams, ListRefundsParams } from './resources/refunds.js';
 export type { JourneyResourceType } from './resources/analytics.js';
+export type { WebhookEndpointParams, WebhookEndpoint } from './resources/webhook-endpoints.js';
+export type {
+  WebhookDelivery, WebhookEventType, ListWebhookDeliveriesParams,
+} from './resources/webhook-events.js';
 export * from './errors.js';
 export * from './types/gaps.js';
 export type { components } from './generated/api.js';

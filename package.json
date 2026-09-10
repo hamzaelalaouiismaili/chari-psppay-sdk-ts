@@ -1,26 +1,55 @@
 {
   "name": "@chari-pay/sdk",
   "version": "0.1.0",
-  "description": "Official TypeScript SDK for the Chari Pay PSP — payments, links, checkout, subscriptions, refunds and verified webhooks.",
+  "description": "Official TypeScript SDK for the Chari Pay PSP \u2014 payments, links, checkout, subscriptions, refunds and verified webhooks.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
-  "repository": { "type": "git", "url": "git+https://github.com/chari-pay/chari-pay-sdk.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chari-pay/chari-pay-sdk.git"
+  },
   "homepage": "https://github.com/chari-pay/chari-pay-sdk#readme",
-  "bugs": { "url": "https://github.com/chari-pay/chari-pay-sdk/issues" },
-  "engines": { "node": ">=18" },
+  "bugs": {
+    "url": "https://github.com/chari-pay/chari-pay-sdk/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "require": "./dist/index.cjs" },
-    "./webhooks": { "types": "./dist/webhooks.d.ts", "import": "./dist/webhooks.js", "require": "./dist/webhooks.cjs" },
-    "./express": { "types": "./dist/express.d.ts", "import": "./dist/express.js", "require": "./dist/express.cjs" },
-    "./nestjs": { "types": "./dist/nestjs.d.ts", "import": "./dist/nestjs.js", "require": "./dist/nestjs.cjs" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.ts",
+      "import": "./dist/webhooks.js",
+      "require": "./dist/webhooks.cjs"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js",
+      "require": "./dist/express.cjs"
+    },
+    "./nestjs": {
+      "types": "./dist/nestjs.d.ts",
+      "import": "./dist/nestjs.js",
+      "require": "./dist/nestjs.cjs"
+    }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run codegen:check && npm run lint && npm run typecheck && npm test && npm run build",
     "codegen": "openapi-typescript api-1.yaml -o src/generated/api.ts",
     "codegen:check": "openapi-typescript api-1.yaml -o /tmp/api.check.ts && diff -q /tmp/api.check.ts src/generated/api.ts",
     "test": "vitest run",
@@ -30,10 +59,17 @@
     "lint": "eslint \"{src,adapters,test}/**/*.ts\"",
     "format": "prettier --write \"{src,adapters,test}/**/*.ts\""
   },
-  "peerDependencies": { "express": ">=4", "@nestjs/common": ">=10" },
+  "peerDependencies": {
+    "express": ">=4",
+    "@nestjs/common": ">=10"
+  },
   "peerDependenciesMeta": {
-    "express": { "optional": true },
-    "@nestjs/common": { "optional": true }
+    "express": {
+      "optional": true
+    },
+    "@nestjs/common": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@nestjs/common": "^10.4.15",

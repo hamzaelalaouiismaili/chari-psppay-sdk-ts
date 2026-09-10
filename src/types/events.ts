@@ -92,7 +92,21 @@ export const CHARI_PAY_EVENT_TYPES = [
 
 export type ChariPayEventType = (typeof CHARI_PAY_EVENT_TYPES)[number];
 
+/**
+ * `known` is `true` for every member of `ChariPayEvent` and `false` for
+ * `ChariPayUnknownEvent`. TypeScript's discriminated-union narrowing cannot
+ * exclude a union member whose discriminant is a non-literal `string` (which
+ * is what `ChariPayUnknownEvent.type` necessarily is) just because `type`
+ * doesn't match a specific literal in an `if` check — the member, and every
+ * field access through it, stays in scope, so any field the fallback doesn't
+ * share with the checked member collapses to `unknown`. Filtering first on
+ * the literal `known` boolean — a real, disjoint discriminant — removes
+ * `ChariPayUnknownEvent` from the type *before* `type` is checked, so the
+ * remaining narrowing on `type` sees only the 21 literal-discriminant
+ * members and works exactly as a normal discriminated union would.
+ */
 type Event<TType extends string, TData> = {
+  known: true;
   type: TType;
   data: TData;
   /** The delivery's raw parsed body, for anything the typed view omits. */
@@ -100,21 +114,17 @@ type Event<TType extends string, TData> = {
 };
 
 /**
- * A verified webhook event, narrowed by `type`.
+ * A verified, *known* webhook event, narrowed by `type`.
  *
  * ```ts
- * if (event.type === 'payment.succeeded') event.data.amount; // number | undefined
+ * if (event.known && event.type === 'payment.succeeded') {
+ *   event.data.amount; // number | undefined
+ * }
  * ```
  *
- * An event type this SDK does not know widens to `{ type: string; data: EventBase }`
- * rather than throwing, so a new Chari Pay event cannot break a deployed
- * integration. (`data` is typed as `EventBase` — an object with an index
- * signature — rather than `unknown`: TypeScript's discriminated-union
- * narrowing keeps a fallback member in scope whenever its discriminant is a
- * non-literal `string`, and pairing that fallback with a literal `unknown`
- * collapses every known member's `data` type to `unknown` too. `EventBase`
- * keeps the same "no throw, no assumed shape" contract at runtime while
- * letting the compiler narrow correctly.)
+ * This union intentionally has no catch-all member. See `ChariPayWebhookEvent`
+ * for what `chari.webhooks.constructEvent` actually returns, and the `known`
+ * doc comment above for why the `known` check must come first.
  */
 export type ChariPayEvent =
   | Event<'payment.initiated', PaymentEventData>
@@ -137,5 +147,38 @@ export type ChariPayEvent =
   | Event<'wallet.transfer_completed', WalletEventData>
   | Event<'security.invalid_signature', SecurityEventData>
   | Event<'security.rate_limit_exceeded', SecurityEventData>
-  | Event<'security.token_reused', SecurityEventData>
-  | Event<string & {}, EventBase>;
+  | Event<'security.token_reused', SecurityEventData>;
+
+/**
+ * A verified webhook delivery whose event type this SDK does not recognize
+ * (a new event Chari Pay added after this SDK shipped, for example).
+ *
+ * `known` is always `false`. `data` is the raw parsed body, untyped — there
+ * is no per-category shape to give it.
+ */
+export interface ChariPayUnknownEvent {
+  known: false;
+  type: string;
+  data: unknown;
+  raw: unknown;
+}
+
+/**
+ * What `chari.webhooks.constructEvent` (and `parseEvent`) actually return:
+ * one of the 21 known events, or an unrecognized delivery. Check `known`
+ * before narrowing on `type`:
+ *
+ * ```ts
+ * const event = chari.webhooks.constructEvent(body, headers);
+ * if (event.known && event.type === 'payment.succeeded') {
+ *   event.data.amount; // number | undefined
+ * } else if (!event.known) {
+ *   // event.type is an arbitrary string here; event.data is unknown.
+ * }
+ * ```
+ *
+ * An event type this SDK does not know still does not throw — it becomes a
+ * `ChariPayUnknownEvent` — so a new Chari Pay event cannot break a deployed
+ * integration.
+ */
+export type ChariPayWebhookEvent = ChariPayEvent | ChariPayUnknownEvent;

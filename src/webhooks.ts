@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ChariPaySignatureVerificationError } from './errors.js';
-import type { ChariPayEvent } from './types/events.js';
+import { CHARI_PAY_EVENT_TYPES, type ChariPayEventType, type ChariPayWebhookEvent } from './types/events.js';
 
 /** Node hands headers over as strings or arrays; accept both. */
 export type HeaderBag = Record<string, string | string[] | undefined>;
@@ -84,13 +84,23 @@ export function verifyWebhookSignature(opts: VerifyOptions): void {
   }
 }
 
+const KNOWN_EVENT_TYPES: readonly string[] = CHARI_PAY_EVENT_TYPES;
+
+function isKnownEventType(type: string): type is ChariPayEventType {
+  return KNOWN_EVENT_TYPES.includes(type);
+}
+
 /**
  * Parses a verified delivery into a typed event.
  *
  * Chari Pay routes on the `chari-event-type` header; the body is flat and may
  * carry no type at all, so the body fields are only a fallback.
+ *
+ * Returns one of the 21 known events (`known: true`) or a
+ * `ChariPayUnknownEvent` (`known: false`) for anything else — see
+ * `ChariPayWebhookEvent` for why `known` must be checked before `type`.
  */
-export function parseEvent(rawBody: string | Buffer, headers: HeaderBag): ChariPayEvent {
+export function parseEvent(rawBody: string | Buffer, headers: HeaderBag): ChariPayWebhookEvent {
   const text = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
   let body: unknown;
   try {
@@ -108,7 +118,11 @@ export function parseEvent(rawBody: string | Buffer, headers: HeaderBag): ChariP
       : undefined;
 
   const type = fromHeader ?? (typeof fromBody === 'string' ? fromBody : 'unknown');
-  return { type, data: body, raw: body } as ChariPayEvent;
+
+  if (isKnownEventType(type)) {
+    return { known: true, type, data: body, raw: body } as ChariPayWebhookEvent;
+  }
+  return { known: false, type, data: body, raw: body };
 }
 
 /** `chari.webhooks` — verification and parsing, bound to the client's secret. */
@@ -122,7 +136,7 @@ export class Webhooks {
    * const event = chari.webhooks.constructEvent(req.rawBody, req.headers);
    * ```
    */
-  constructEvent(rawBody: string | Buffer, headers: HeaderBag, secret?: string): ChariPayEvent {
+  constructEvent(rawBody: string | Buffer, headers: HeaderBag, secret?: string): ChariPayWebhookEvent {
     const resolved = secret ?? this.defaultSecret;
     if (!resolved) {
       throw new ChariPaySignatureVerificationError(
@@ -139,5 +153,5 @@ export class Webhooks {
   }
 }
 
-export type { ChariPayEvent } from './types/events.js';
+export type { ChariPayEvent, ChariPayUnknownEvent, ChariPayWebhookEvent } from './types/events.js';
 export { CHARI_PAY_EVENT_TYPES } from './types/events.js';

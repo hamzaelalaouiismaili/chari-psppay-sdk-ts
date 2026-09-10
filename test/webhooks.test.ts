@@ -108,7 +108,7 @@ describe('constructEvent', () => {
     const event = chari.webhooks.constructEvent(rawBody, headers);
 
     expect(event.type).toBe('payment.succeeded');
-    if (event.type === 'payment.succeeded') expect(event.data.reference).toBe('pl_1');
+    if (event.known && event.type === 'payment.succeeded') expect(event.data.reference).toBe('pl_1');
   });
 
   it('falls back to a type field in the body', () => {

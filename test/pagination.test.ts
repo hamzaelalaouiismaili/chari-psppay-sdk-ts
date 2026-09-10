@@ -54,6 +54,16 @@ describe('PagePromise', () => {
     await expect(new PagePromise(fakePages()).autoPagingToArray()).rejects.toThrow(/limit/);
   });
 
+  it('refuses a non-positive limit with the guard\'s own message', async () => {
+    // Calling with no argument at all rejects via a native TypeError from
+    // destructuring `undefined` — its message happens to contain "limit" too,
+    // but that's not evidence the implementation's own guard ever runs. Passing
+    // an explicit non-positive `limit` exercises that guard directly.
+    await expect(new PagePromise(fakePages()).autoPagingToArray({ limit: 0 })).rejects.toThrow(
+      'autoPagingToArray requires a positive `limit`.',
+    );
+  });
+
   it('tolerates a bare array response', async () => {
     const page = await new PagePromise(async () => [7, 8] as unknown as Page<number>);
     expect(page.content).toEqual([7, 8]);

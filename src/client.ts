@@ -1,4 +1,5 @@
 import { HttpClient, type ChariPayRequestInfo, type ChariPayResponseInfo, type ResolvedConfig } from './http.js';
+import { TransactionsResource } from './resources/transactions.js';
 import { WalletResource } from './resources/wallet.js';
 
 export const SANDBOX_BASE_URL = 'https://chari-pay-api.mobileappexpert.dev';
@@ -41,6 +42,7 @@ export class ChariPay {
   protected readonly http: HttpClient;
 
   readonly wallet: WalletResource;
+  readonly transactions: TransactionsResource;
 
   constructor(config: ChariPayConfig | string) {
     const input: ChariPayConfig = typeof config === 'string' ? { apiKey: config } : config ?? ({} as ChariPayConfig);
@@ -69,6 +71,7 @@ export class ChariPay {
 
     this.http = new HttpClient(this.config);
     this.wallet = new WalletResource(this.http);
+    this.transactions = new TransactionsResource(this.http);
   }
 
   /** True when the key resolved to the sandbox environment. */

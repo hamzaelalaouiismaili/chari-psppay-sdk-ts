@@ -1,4 +1,6 @@
 import { createHmac } from 'node:crypto';
+import net from 'node:net';
+import type { AddressInfo } from 'node:net';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
@@ -103,5 +105,71 @@ describe('chariPayWebhook (express)', () => {
     const res = await request(app).post('/webhooks').set(headers).send(body);
 
     expect(res.status).toBe(418);
+  });
+
+  it('rejects a raw body larger than maxBodyBytes with 413, without buffering it all', async () => {
+    const app = express();
+    app.post('/webhooks', chariPayWebhook({ secret: SECRET, maxBodyBytes: 1024 }), (_req, res) => res.sendStatus(200));
+
+    // Comfortably over the 1 KiB cap; a real attack would be far larger, but
+    // this is enough to prove the cap trips before the body is fully read.
+    const oversized = 'a'.repeat(1024 * 64);
+    const res = await request(app)
+      .post('/webhooks')
+      .set('content-type', 'application/json')
+      .send(oversized);
+
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe('BODY_TOO_LARGE');
+  });
+
+  it('honours a default 1 MiB cap when maxBodyBytes is not set', async () => {
+    const app = express();
+    app.post('/webhooks', chariPayWebhook({ secret: SECRET }), (_req, res) => res.sendStatus(200));
+
+    const oversized = 'a'.repeat(1024 * 1024 + 1);
+    const res = await request(app)
+      .post('/webhooks')
+      .set('content-type', 'application/json')
+      .send(oversized);
+
+    expect(res.status).toBe(413);
+  });
+
+  it('rejects with 408 when reading the raw body exceeds bodyTimeoutMs (slowloris guard)', async () => {
+    const app = express();
+    app.post('/webhooks', chariPayWebhook({ secret: SECRET, bodyTimeoutMs: 50 }), (_req, res) => res.sendStatus(200));
+    const server = app.listen(0);
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const socket = net.createConnection(port, '127.0.0.1', () => {
+          socket.write(
+            'POST /webhooks HTTP/1.1\r\n' +
+              'Host: localhost\r\n' +
+              'Content-Type: application/json\r\n' +
+              'Content-Length: 20\r\n' +
+              'Connection: close\r\n\r\n' +
+              '{"a":1', // deliberately incomplete — never sends the rest, so `end` never fires
+          );
+        });
+        let raw = '';
+        socket.on('data', (chunk) => {
+          raw += chunk.toString('utf8');
+        });
+        socket.on('end', () => {
+          const statusLine = raw.split('\r\n')[0] ?? '';
+          const match = /HTTP\/1\.\d (\d+)/.exec(statusLine);
+          resolve(match ? Number(match[1]) : 0);
+        });
+        socket.on('error', reject);
+        setTimeout(() => reject(new Error('socket test timed out')), 5000);
+      });
+
+      expect(status).toBe(408);
+    } finally {
+      server.close();
+    }
   });
 });

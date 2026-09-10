@@ -92,6 +92,50 @@ describe('verifyWebhookSignature', () => {
     const bag = { ...headers, 'chari-webhook-signature': [headers['chari-webhook-signature']!] };
     expect(() => verifyWebhookSignature({ rawBody, headers: bag, secret: SECRET })).not.toThrow();
   });
+
+  it('accepts the alternate x-chari-timestamp header spelling', () => {
+    const { rawBody, headers } = signedDelivery({ a: 1 });
+    const timestamp = headers['chari-webhook-timestamp']!;
+    delete headers['chari-webhook-timestamp'];
+    headers['x-chari-timestamp'] = timestamp;
+    expect(() => verifyWebhookSignature({ rawBody, headers, secret: SECRET })).not.toThrow();
+  });
+
+  describe('secret rotation: secret accepts a string or an array of candidates', () => {
+    const OLD_SECRET = 'whsec_OLD';
+    const NEW_SECRET = 'whsec_NEW';
+
+    it('verifies a delivery signed with the OLD secret when both old and new are supplied', () => {
+      const { rawBody, headers } = signedDelivery({ reference: 'pl_1' }, OLD_SECRET);
+      expect(() =>
+        verifyWebhookSignature({ rawBody, headers, secret: [NEW_SECRET, OLD_SECRET] }),
+      ).not.toThrow();
+    });
+
+    it('verifies a delivery signed with the NEW secret when both old and new are supplied', () => {
+      const { rawBody, headers } = signedDelivery({ reference: 'pl_1' }, NEW_SECRET);
+      expect(() =>
+        verifyWebhookSignature({ rawBody, headers, secret: [NEW_SECRET, OLD_SECRET] }),
+      ).not.toThrow();
+    });
+
+    it('still rejects a delivery signed with neither candidate secret', () => {
+      const { rawBody, headers } = signedDelivery({ reference: 'pl_1' }, 'whsec_SOMETHING_ELSE');
+      expect(() =>
+        verifyWebhookSignature({ rawBody, headers, secret: [NEW_SECRET, OLD_SECRET] }),
+      ).toThrow(ChariPaySignatureVerificationError);
+    });
+
+    it('a single string secret keeps working exactly as before (backwards compatible)', () => {
+      const { rawBody, headers } = signedDelivery({ reference: 'pl_1' }, SECRET);
+      expect(() => verifyWebhookSignature({ rawBody, headers, secret: SECRET })).not.toThrow();
+    });
+
+    it('treats an empty array the same as no secret', () => {
+      const { rawBody, headers } = signedDelivery({ reference: 'pl_1' });
+      expect(() => verifyWebhookSignature({ rawBody, headers, secret: [] })).toThrow(/secret/i);
+    });
+  });
 });
 
 describe('constructEvent', () => {
@@ -131,5 +175,17 @@ describe('constructEvent', () => {
     const bare = new ChariPay('chari_sk_test_EXAMPLE');
     const { rawBody, headers } = signedDelivery({ a: 1 });
     expect(() => bare.webhooks.constructEvent(rawBody, headers)).toThrow(/webhookSecret/);
+  });
+
+  it('accepts a rotation-in-progress delivery (signed with the OLD secret) when the client is configured with both', () => {
+    const OLD_SECRET = 'whsec_OLD';
+    const rotating = new ChariPay({
+      apiKey: 'chari_sk_test_EXAMPLE',
+      webhookSecret: [SECRET, OLD_SECRET],
+    });
+    const { rawBody, headers } = signedDelivery({ reference: 'pl_1' }, OLD_SECRET, { eventType: 'payment.succeeded' });
+
+    const event = rotating.webhooks.constructEvent(rawBody, headers);
+    expect(event.type).toBe('payment.succeeded');
   });
 });

@@ -4,6 +4,10 @@
   "description": "Official TypeScript SDK for the Chari Pay PSP — payments, links, checkout, subscriptions, refunds and verified webhooks.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
+  "repository": { "type": "git", "url": "git+https://github.com/chari-pay/chari-pay-sdk.git" },
+  "homepage": "https://github.com/chari-pay/chari-pay-sdk#readme",
+  "bugs": { "url": "https://github.com/chari-pay/chari-pay-sdk/issues" },
   "engines": { "node": ">=18" },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -21,6 +25,7 @@
     "codegen:check": "openapi-typescript api-1.yaml -o /tmp/api.check.ts && diff -q /tmp/api.check.ts src/generated/api.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:dist": "npm run build && vitest run -c vitest.dist.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"{src,adapters,test}/**/*.ts\"",
     "format": "prettier --write \"{src,adapters,test}/**/*.ts\""

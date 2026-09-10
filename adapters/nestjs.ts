@@ -10,10 +10,10 @@ import {
   type ModuleMetadata,
   type Provider,
 } from '@nestjs/common';
-import { ChariPay, type ChariPayConfig } from '../src/index.js';
-import { ChariPaySignatureVerificationError, ChariPayWebhookSetupError } from '../src/errors.js';
-import { parseEvent, verifyWebhookSignature } from '../src/webhooks.js';
-import type { ChariPayEvent } from '../src/types/events.js';
+import { ChariPay, type ChariPayConfig } from '@chari-pay/sdk';
+import { ChariPaySignatureVerificationError, ChariPayWebhookSetupError } from '@chari-pay/sdk';
+import { parseEvent, verifyWebhookSignature } from '@chari-pay/sdk/webhooks';
+import type { ChariPayEvent } from '@chari-pay/sdk';
 
 /** Injection token for the raw options object. */
 export const CHARI_PAY_OPTIONS = Symbol('CHARI_PAY_OPTIONS');
@@ -100,7 +100,8 @@ export class ChariPayWebhookGuard implements CanActivate {
       [EVENT_KEY]?: ChariPayEvent;
     }>();
 
-    if (!this.options.webhookSecret) {
+    const secret = this.options.webhookSecret;
+    if (!secret || (Array.isArray(secret) && secret.length === 0)) {
       throw new ChariPayWebhookSetupError(
         'ChariPayModule was configured without `webhookSecret`, so deliveries cannot be verified.',
       );
@@ -117,8 +118,9 @@ export class ChariPayWebhookGuard implements CanActivate {
       verifyWebhookSignature({
         rawBody: req.rawBody,
         headers: req.headers,
-        secret: this.options.webhookSecret,
+        secret,
       });
+      req[EVENT_KEY] = parseEvent(req.rawBody, req.headers);
     } catch (error) {
       if (error instanceof ChariPaySignatureVerificationError) {
         throw new BadRequestException({ error: { code: error.code, message: error.message } });
@@ -126,7 +128,6 @@ export class ChariPayWebhookGuard implements CanActivate {
       throw error;
     }
 
-    req[EVENT_KEY] = parseEvent(req.rawBody, req.headers);
     return true;
   }
 }

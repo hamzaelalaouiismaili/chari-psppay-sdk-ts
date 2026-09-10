@@ -5,6 +5,16 @@ interface ErrorEnvelope {
 }
 
 /**
+ * Every instance carries the class-name chain it was constructed with (e.g.
+ * `['ChariPayValidationError', 'ChariPayError']`), keyed off a well-known
+ * symbol so `instanceof` can still recognise it even when it crossed a
+ * module boundary that gave us a *different* copy of the `ChariPayError`
+ * classes (a duplicate-dependency bundler quirk, or two SDK versions loaded
+ * at once). See `ChariPayError[Symbol.hasInstance]` below.
+ */
+const CHARI_PAY_ERROR_BRAND: unique symbol = Symbol.for('@chari-pay/sdk/ChariPayError');
+
+/**
  * Base class for every error the SDK throws.
  *
  * `correlationId` is the value Chari Pay support asks for first, so it is part
@@ -33,6 +43,41 @@ export class ChariPayError extends Error {
     this.requestId = args.requestId;
     this.raw = args.raw;
     Error.captureStackTrace?.(this, new.target);
+
+    const chain: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    let ctor: unknown = new.target;
+    while (typeof ctor === 'function') {
+      chain.push((ctor as { name: string }).name);
+      if (ctor === ChariPayError) break;
+      ctor = Object.getPrototypeOf(ctor);
+    }
+    Object.defineProperty(this, CHARI_PAY_ERROR_BRAND, { value: chain, enumerable: false });
+  }
+
+  /**
+   * Reproduces the normal prototype-chain `instanceof` for the common case
+   * (same loaded copy of this module — guaranteed across every officially
+   * built entry point since the packaging fix), and falls back to the brand
+   * above when `instance` came from a genuinely different copy of this
+   * class. The fallback still respects the specific subclass being tested
+   * against: `this.name` is the constructor `instanceof` was invoked with
+   * (e.g. `ChariPayValidationError`), so a `ChariPayRateLimitError` never
+   * matches it.
+   */
+  static [Symbol.hasInstance](this: { prototype: unknown; name: string }, instance: unknown): boolean {
+    if (typeof instance === 'object' && instance !== null && this.prototype != null) {
+      let proto: unknown = Object.getPrototypeOf(instance);
+      while (proto) {
+        if (proto === this.prototype) return true;
+        proto = Object.getPrototypeOf(proto);
+      }
+    }
+    const chain =
+      instance !== null && typeof instance === 'object'
+        ? (instance as Record<symbol, unknown>)[CHARI_PAY_ERROR_BRAND]
+        : undefined;
+    return Array.isArray(chain) && chain.includes(this.name);
   }
 
   override toString(): string {

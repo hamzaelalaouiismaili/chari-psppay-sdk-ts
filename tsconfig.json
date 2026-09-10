@@ -11,6 +11,11 @@
     "declaration": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "rootDir": ".",
+    "paths": {
+      "@chari-pay/sdk": ["./src/index.ts"],
+      "@chari-pay/sdk/webhooks": ["./src/webhooks.ts"]
+    },
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "outDir": "dist"

@@ -92,21 +92,7 @@ export const CHARI_PAY_EVENT_TYPES = [
 
 export type ChariPayEventType = (typeof CHARI_PAY_EVENT_TYPES)[number];
 
-/**
- * `known` is `true` for every member of `ChariPayEvent` and `false` for
- * `ChariPayUnknownEvent`. TypeScript's discriminated-union narrowing cannot
- * exclude a union member whose discriminant is a non-literal `string` (which
- * is what `ChariPayUnknownEvent.type` necessarily is) just because `type`
- * doesn't match a specific literal in an `if` check — the member, and every
- * field access through it, stays in scope, so any field the fallback doesn't
- * share with the checked member collapses to `unknown`. Filtering first on
- * the literal `known` boolean — a real, disjoint discriminant — removes
- * `ChariPayUnknownEvent` from the type *before* `type` is checked, so the
- * remaining narrowing on `type` sees only the 21 literal-discriminant
- * members and works exactly as a normal discriminated union would.
- */
 type Event<TType extends string, TData> = {
-  known: true;
   type: TType;
   data: TData;
   /** The delivery's raw parsed body, for anything the typed view omits. */
@@ -114,17 +100,37 @@ type Event<TType extends string, TData> = {
 };
 
 /**
- * A verified, *known* webhook event, narrowed by `type`.
+ * A verified webhook event, narrowed by `type`:
  *
  * ```ts
- * if (event.known && event.type === 'payment.succeeded') {
+ * if (event.type === 'payment.succeeded') {
  *   event.data.amount; // number | undefined
  * }
  * ```
  *
- * This union intentionally has no catch-all member. See `ChariPayWebhookEvent`
- * for what `chari.webhooks.constructEvent` actually returns, and the `known`
- * doc comment above for why the `known` check must come first.
+ * **This type is a deliberate approximation, not a closed set.** `type` here
+ * is one of the 21 literals below so that narrowing on it — the whole point
+ * of this union — works, editor autocomplete lists real event names, and a
+ * `switch` reads naturally. But Chari Pay can and does send event types this
+ * SDK doesn't know about yet (a new event added after this SDK shipped), and
+ * `chari.webhooks.constructEvent` / `parseEvent` still return that delivery
+ * rather than throwing — it just arrives *typed* as if it were one of the 21,
+ * even though at runtime `event.type` may hold a string outside that set.
+ *
+ * Practical consequences:
+ * - **Keep a `default` branch in every `switch (event.type)`**, and an
+ *   `else` after your last `if`/`else if` chain. An unrecognised delivery
+ *   silently falls through every specific case and lands there.
+ * - **Do not rely on exhaustiveness checking** (e.g. `const _exhaustive: never
+ *   = event.type` after handling all 21 cases) to catch a missing case —
+ *   it will compile even though a real, unhandled event type can still
+ *   arrive at runtime. That check is misleading here by design.
+ * - If you want to *verify* a type is really one of the 21 rather than
+ *   assume it, use the exported `isKnownEventType(event.type)` type guard
+ *   (backed by `CHARI_PAY_EVENT_TYPES`), or narrow explicitly with
+ *   `ChariPayUnknownEvent` for the unrecognised case. Both are sound;
+ *   `ChariPayEvent` alone is not — it trades a little type-level soundness
+ *   for the ergonomic `if (event.type === 'x')` every integration writes.
  */
 export type ChariPayEvent =
   | Event<'payment.initiated', PaymentEventData>
@@ -151,34 +157,33 @@ export type ChariPayEvent =
 
 /**
  * A verified webhook delivery whose event type this SDK does not recognize
- * (a new event Chari Pay added after this SDK shipped, for example).
+ * (a new event Chari Pay added after this SDK shipped, for example). `data`
+ * is the raw parsed body, untyped — there is no per-category shape to give
+ * it. Use this, plus `isKnownEventType`, when you want a sound check rather
+ * than the `ChariPayEvent` approximation described above:
  *
- * `known` is always `false`. `data` is the raw parsed body, untyped — there
- * is no per-category shape to give it.
+ * ```ts
+ * const event = chari.webhooks.constructEvent(body, headers);
+ * if (isKnownEventType(event.type)) {
+ *   // event.type: ChariPayEventType, verified against CHARI_PAY_EVENT_TYPES
+ * } else {
+ *   const unknownEvent: ChariPayUnknownEvent = event;
+ * }
+ * ```
  */
 export interface ChariPayUnknownEvent {
-  known: false;
   type: string;
   data: unknown;
   raw: unknown;
 }
 
 /**
- * What `chari.webhooks.constructEvent` (and `parseEvent`) actually return:
- * one of the 21 known events, or an unrecognized delivery. Check `known`
- * before narrowing on `type`:
- *
- * ```ts
- * const event = chari.webhooks.constructEvent(body, headers);
- * if (event.known && event.type === 'payment.succeeded') {
- *   event.data.amount; // number | undefined
- * } else if (!event.known) {
- *   // event.type is an arbitrary string here; event.data is unknown.
- * }
- * ```
- *
- * An event type this SDK does not know still does not throw — it becomes a
- * `ChariPayUnknownEvent` — so a new Chari Pay event cannot break a deployed
- * integration.
+ * Sound runtime check for whether `type` is one of the 21 names in
+ * `CHARI_PAY_EVENT_TYPES`. `ChariPayEvent`'s `type` narrowing is an
+ * approximation (see its doc comment) — this guard is the actual, honest
+ * check, for anyone who wants to distinguish a genuinely known event from
+ * one this SDK merely typed as if it were known.
  */
-export type ChariPayWebhookEvent = ChariPayEvent | ChariPayUnknownEvent;
+export function isKnownEventType(type: string): type is ChariPayEventType {
+  return (CHARI_PAY_EVENT_TYPES as readonly string[]).includes(type);
+}

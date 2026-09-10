@@ -24,7 +24,7 @@ export interface ListPaymentLinksParams extends PaginationParams {
  *   description: 'Order #1234',
  *   acceptUrl: 'https://shop.example.com/success',
  * });
- * console.log(link.url);
+ * console.log(link.payUrl);
  * ```
  */
 export class PaymentLinksResource extends BaseResource {

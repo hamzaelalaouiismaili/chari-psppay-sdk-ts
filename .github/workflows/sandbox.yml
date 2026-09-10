@@ -1,0 +1,15 @@
+name: Sandbox smoke
+on:
+  workflow_dispatch:
+  schedule: [{ cron: '0 3 * * *' }]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - run: npx tsx scripts/sandbox-smoke.ts
+        env:
+          CHARI_PAY_API_KEY: ${{ secrets.CHARI_PAY_SANDBOX_KEY }}

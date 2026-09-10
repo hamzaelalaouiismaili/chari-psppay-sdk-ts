@@ -319,3 +319,11 @@ const chari = new ChariPay({
 ## Types
 
 All request/response types are generated from `api-1.yaml` via `openapi-typescript` (`npm run codegen`). A handful of types — mostly wallet and transaction response shapes the spec doesn't define — are hand-modelled instead; their doc comments are marked `Not defined in api-1.yaml`. Treat those as a best reading of the endpoint description, not a contract, and expect them to tighten as Chari Pay publishes real schemas.
+
+## Migrating from a hand-rolled client
+
+Already calling the API through a hand-rolled wrapper, like the `example_psp` tester app's `ChariPayClientService`? See [MIGRATION.md](./MIGRATION.md) for before/after call pairs across every domain.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the codegen workflow, the rule against hand-editing `src/generated/`, and how hand-modelled types are documented.
